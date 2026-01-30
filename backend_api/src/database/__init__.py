@@ -23,12 +23,14 @@ _db_effective_path: Optional[str] = None
 
 def _default_db_path() -> str:
     """
-    Compute a deterministic default DB path under the container root.
+    Compute a deterministic default DB path under the backend_api container root.
 
     We avoid relying on process working directory (which can differ between
     pytest, uvicorn, and preview environments).
     """
-    container_root = Path(__file__).resolve().parents[3]  # .../backend_api
+    # __file__ = .../backend_api/src/database/__init__.py
+    # parents[2] = .../backend_api
+    container_root = Path(__file__).resolve().parents[2]
     return str(container_root / "data" / "app.db")
 
 
@@ -75,9 +77,16 @@ def _ensure_system_user(conn: sqlite3.Connection) -> None:
             "SELECT user_id, username, roles, is_active FROM users WHERE user_id = ?",
             ("system",),
         )
+        cols = {r[1] for r in conn.execute("PRAGMA table_info(users);").fetchall()}
     except sqlite3.OperationalError:
         # users table not created yet. init_db() will call us again after table creation.
         logger.warning("Cannot ensure system user because users table does not exist yet.")
+        return
+
+    # If critical auth columns are missing in an older schema, skip instead of crashing.
+    required_cols = {"user_id", "username", "password_hash", "password_salt", "roles", "is_active", "created_at"}
+    if not required_cols.issubset(cols):
+        logger.warning("users table missing required columns (%s); cannot ensure system user safely.", sorted(required_cols - cols))
         return
 
     row = cursor.fetchone()
@@ -95,10 +104,18 @@ def _ensure_system_user(conn: sqlite3.Connection) -> None:
             roles.append("system")
         roles_str = ",".join([r for r in roles if r])
 
-        conn.execute(
-            "UPDATE users SET username = ?, roles = ?, is_active = 1, role = ? WHERE user_id = ?",
-            ("system", roles_str, desired_primary_role, "system"),
-        )
+        updates = {
+            "username": "system",
+            "roles": roles_str,
+            "is_active": 1,
+        }
+        if "role" in cols:
+            updates["role"] = desired_primary_role
+        if "display_name" in cols:
+            updates["display_name"] = "System"
+
+        set_sql = ", ".join([f"{k} = ?" for k in updates.keys()])
+        conn.execute(f"UPDATE users SET {set_sql} WHERE user_id = ?", (*updates.values(), "system"))
         conn.commit()
         return
 
@@ -106,10 +123,20 @@ def _ensure_system_user(conn: sqlite3.Connection) -> None:
     auth = AuthService(conn)
     pwd_hash, salt = auth.hash_password("Passw0rd!")
 
+    insert_cols = ["user_id", "username", "password_hash", "password_salt", "roles", "is_active", "created_at"]
+    insert_vals = ["system", "system", pwd_hash, salt, desired_roles, True, created_at]
+
+    if "display_name" in cols:
+        insert_cols.append("display_name")
+        insert_vals.append("System")
+    if "role" in cols:
+        insert_cols.append("role")
+        insert_vals.append(desired_primary_role)
+
+    placeholders = ",".join(["?"] * len(insert_cols))
     conn.execute(
-        """INSERT INTO users(user_id, username, password_hash, password_salt, roles, is_active, created_at, display_name, role)
-           VALUES(?,?,?,?,?,?,?,?,?)""",
-        ("system", "system", pwd_hash, salt, desired_roles, True, created_at, "System", desired_primary_role),
+        f"INSERT INTO users({','.join(insert_cols)}) VALUES({placeholders})",
+        insert_vals,
     )
     conn.commit()
 
@@ -121,9 +148,19 @@ def get_db_path() -> str:
     if not db_path:
         db_path = _default_db_path()
 
+    # If user configured a relative path (e.g., "data/app.db"), resolve it against
+    # the backend_api root to avoid surprises when cwd differs.
+    if db_path != ":memory:" and not Path(db_path).is_absolute() and not db_path.startswith("file:"):
+        base_dir = Path(__file__).resolve().parents[2]  # .../backend_api
+        db_path = str(base_dir / db_path)
+
     # Create parent dir so sqlite can create/open the file cleanly.
-    # If this fails, caller may choose to fallback to /tmp.
-    _ensure_parent_dir(db_path)
+    # If this fails, caller may choose to fallback to /tmp or in-memory.
+    try:
+        _ensure_parent_dir(db_path)
+    except Exception:
+        logger.exception("Failed to create parent directory for SQLITE_DB_PATH=%s", db_path)
+
     return db_path
 
 
@@ -222,6 +259,17 @@ def init_db() -> None:
 
     # Create index on username for fast lookups
     conn.execute("CREATE INDEX IF NOT EXISTS idx_users_username ON users(username);")
+
+    # Forward-compatible migration for older DBs: add optional columns if missing.
+    try:
+        cols = {r[1] for r in conn.execute("PRAGMA table_info(users);").fetchall()}
+        if "display_name" not in cols:
+            conn.execute("ALTER TABLE users ADD COLUMN display_name TEXT;")
+        if "role" not in cols:
+            conn.execute("ALTER TABLE users ADD COLUMN role TEXT;")
+    except Exception:
+        # Never fail startup due to a best-effort migration.
+        logger.exception("Non-fatal: failed applying users table forward-compat migrations.")
 
     # Ensure deterministic system user exists before any audit events can be written.
     _ensure_system_user(conn)

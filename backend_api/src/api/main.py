@@ -19,9 +19,18 @@ For WebSocket usage examples, see the /docs/websocket-usage endpoint.
 """
 from contextlib import asynccontextmanager
 import logging
+import os
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request, status
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+
+# Ensure we emit useful startup diagnostics in preview/CI even if no logging is configured.
+if not logging.getLogger().handlers:
+    logging.basicConfig(
+        level=os.getenv("LOG_LEVEL", "INFO"),
+        format="%(asctime)s %(levelname)s [%(name)s] %(message)s",
+    )
 
 logger = logging.getLogger("backend_api")
 
@@ -135,10 +144,10 @@ def health_check():
     """
     Health check endpoint (liveness).
 
-    Returns basic health status without touching dependencies (e.g., DB), so the
-    service can report liveness even in degraded mode.
+    Returns a deterministic payload without touching dependencies (e.g., DB),
+    so the service can report liveness even in degraded mode.
     """
-    return {"status": "ok"}
+    return {"message": "Healthy"}
 
 
 # PUBLIC_INTERFACE
@@ -147,9 +156,9 @@ def health_endpoint():
     """
     Health endpoint (liveness).
 
-    Returns JSON {"status":"ok"} and does not depend on DB connectivity.
+    Returns a deterministic payload and does not depend on DB connectivity.
     """
-    return {"status": "ok"}
+    return {"message": "Healthy"}
 
 
 # PUBLIC_INTERFACE
@@ -157,29 +166,37 @@ def health_endpoint():
     "/ready",
     tags=["health"],
     summary="Readiness Endpoint",
-    description="Readiness probe (touches DB). Returns 200 only when DB is reachable.",
+    description="Readiness probe (touches DB). Returns 200 only when DB is reachable and initialized.",
+    operation_id="readiness_endpoint",
 )
-def readiness_endpoint():
+def readiness_endpoint(request: Request):
     """
     Readiness endpoint (DB-dependent).
 
     This is intended for environments that want a stronger signal than /health.
-    It checks whether the DB connection can be established and a trivial query succeeds.
+    It checks whether:
+      - a DB connection can be established and a trivial query succeeds, AND
+      - the app successfully ran schema init during lifespan startup.
 
     Returns:
-      - 200 when DB is reachable
+      - 200 when DB is reachable and initialized
       - 503 when DB is not ready
     """
     ok, path, degraded = db_status()
-    if ok:
-        return {"status": "ready", "db": {"ok": True, "path": path, "degraded": degraded}}
-    # Keep response shape stable for callers
-    from fastapi import Response, status
+    initialized = bool(getattr(request.app.state, "db_initialized", False))
 
-    return Response(
-        content='{"status":"not_ready","db":{"ok":false}}',
-        media_type="application/json",
+    if ok and initialized:
+        return {
+            "status": "ready",
+            "db": {"ok": True, "path": path, "degraded": degraded, "initialized": initialized},
+        }
+
+    return JSONResponse(
         status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+        content={
+            "status": "not_ready",
+            "db": {"ok": bool(ok), "path": path, "degraded": degraded, "initialized": initialized},
+        },
     )
 
 
