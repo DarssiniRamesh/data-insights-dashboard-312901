@@ -17,7 +17,6 @@ def _authn_todo(reason: str) -> str:
 @pytest.mark.api
 @pytest.mark.frd
 @pytest.mark.anyio
-@pytest.mark.xfail(reason=_todo("FRD-DPP-001 /submissions endpoint not implemented"))
 async def test_api_create_submission_returns_201(async_client, seed_submission_payload):
     """
     FR-DPP-001 (Submission):
@@ -38,7 +37,6 @@ async def test_api_create_submission_returns_201(async_client, seed_submission_p
 @pytest.mark.api
 @pytest.mark.frd
 @pytest.mark.anyio
-@pytest.mark.xfail(reason=_todo("FRD-DPP-004 quality gates endpoint not implemented"))
 async def test_api_run_quality_gates_blocks_on_failure(async_client):
     """
     FR-DPP-004 (Mandatory gates) / FR-DPP-008 (Block on failure).
@@ -57,7 +55,6 @@ async def test_api_run_quality_gates_blocks_on_failure(async_client):
 @pytest.mark.api
 @pytest.mark.frd
 @pytest.mark.anyio
-@pytest.mark.xfail(reason=_todo("FRD-DPP-006 approval endpoint and SoD checks not implemented"))
 async def test_api_approval_rejects_sod_violation(async_client):
     """
     Legacy placeholder test (kept): SoD: submitter cannot approve own submission.
@@ -71,7 +68,6 @@ async def test_api_approval_rejects_sod_violation(async_client):
 @pytest.mark.api
 @pytest.mark.frd
 @pytest.mark.anyio
-@pytest.mark.xfail(reason=_todo("FRD-DPP-007 publish endpoint not implemented"))
 async def test_api_publish_returns_published_location(async_client):
     """
     FR-DPP-025/FR-DPP-026/FR-DPP-027 style publish outputs will be validated here once implemented.
@@ -90,7 +86,6 @@ async def test_api_publish_returns_published_location(async_client):
 @pytest.mark.api
 @pytest.mark.nfr
 @pytest.mark.anyio
-@pytest.mark.xfail(reason=_authn_todo("TS-SEC-AUTHN-001 requires auth seam; no auth middleware yet"))
 async def test_auth_missing_token_rejected_401(async_client, seed_submission_payload):
     """
     Authentication failure: missing token/header.
@@ -107,7 +102,6 @@ async def test_auth_missing_token_rejected_401(async_client, seed_submission_pay
 @pytest.mark.api
 @pytest.mark.nfr
 @pytest.mark.anyio
-@pytest.mark.xfail(reason=_authn_todo("Invalid/expired token validation not implemented"))
 async def test_auth_invalid_or_expired_token_rejected_401(async_client):
     """
     Authentication failure: invalid/expired token.
@@ -126,7 +120,6 @@ async def test_auth_invalid_or_expired_token_rejected_401(async_client):
 @pytest.mark.api
 @pytest.mark.nfr
 @pytest.mark.anyio
-@pytest.mark.xfail(reason=_authn_todo("Audience/scope validation not implemented"))
 async def test_auth_wrong_audience_or_scope_rejected_403(async_client):
     """
     Authentication/authorization failure: wrong audience/scope.
@@ -144,7 +137,6 @@ async def test_auth_wrong_audience_or_scope_rejected_403(async_client):
 @pytest.mark.api
 @pytest.mark.nfr
 @pytest.mark.anyio
-@pytest.mark.xfail(reason=_authz_todo("RBAC enforcement not implemented for restricted endpoints"))
 async def test_authz_publisher_cannot_access_audit_events_403(async_client):
     """
     Authorization failure: role-based access control violation.

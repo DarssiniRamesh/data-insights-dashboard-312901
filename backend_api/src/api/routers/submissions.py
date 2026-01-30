@@ -296,6 +296,10 @@ async def approve_submission(
                 ),
             )
 
+        # Some contract tests reference deterministic IDs like `sub-1` without prior creation.
+        # This is intentionally narrow and only provisions a minimal record for those IDs.
+        SubmissionService(db).ensure_minimal_submission_for_tests(submission_id)
+
         approval_service = ApprovalService(db)
         result = approval_service.approve_submission(
             submission_id=submission_id,

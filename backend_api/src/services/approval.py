@@ -3,6 +3,7 @@ PUBLIC_INTERFACE
 Approval service for managing submission approvals with SoD and e-sign validation.
 """
 import json
+import os
 from typing import Dict, Any, Optional
 from datetime import datetime, timedelta, timezone
 
@@ -190,10 +191,36 @@ class ApprovalService:
         if not signature:
             raise SignatureError("Electronic signature required for approval", {"submission_id": submission_id})
 
+        # Identity binding: signer must be the authenticated approver.
+        if signature.get("signer_user_id") and signature.get("signer_user_id") != approver_user_id:
+            raise SignatureError(
+                "Signature signer_user_id does not match authenticated user",
+                {"expected": approver_user_id, "provided": signature.get("signer_user_id")},
+            )
+
+        # Timestamp window policy (+/- SIGNATURE_WINDOW_MINUTES, using audit_context time as "now").
+        signed_at = signature.get("signed_at_utc")
+        if not signed_at:
+            raise SignatureError("Missing signed_at_utc in signature block", {"missing_field": "signed_at_utc"})
+        try:
+            signed_time = datetime.fromisoformat(str(signed_at).replace("Z", "+00:00"))
+            now_utc = datetime.now(timezone.utc)
+            diff_min = abs((now_utc - signed_time).total_seconds()) / 60.0
+            if diff_min > self.SIGNATURE_WINDOW_MINUTES:
+                raise SignatureError(
+                    f"Signature timestamp outside allowed window ({self.SIGNATURE_WINDOW_MINUTES} minutes)",
+                    {"signed_at_utc": signed_at, "current_utc": utc_now_iso(), "window_minutes": self.SIGNATURE_WINDOW_MINUTES},
+                )
+        except SignatureError:
+            raise
+        except Exception as e:
+            raise SignatureError("Invalid signature timestamp format", {"signed_at_utc": signed_at, "error": str(e)})
+
         if signature.get("reauthentication_method") == "password":
             if not password_for_esign:
                 raise SignatureError("Password re-entry required for electronic signature", {"reauthentication_method": "password"})
             from services.auth import AuthService
+
             auth_service = AuthService(self.db)
             cursor = self.db.execute("SELECT password_hash, password_salt FROM users WHERE user_id = ?", (approver_user_id,))
             user_row = cursor.fetchone()
@@ -202,7 +229,8 @@ class ApprovalService:
             if not auth_service.verify_password(password_for_esign, user_row["password_hash"], user_row["password_salt"]):
                 raise SignatureError("Invalid password for electronic signature", {})
 
-        if "signature_hash" in signature:
+        # Hash check (when provided) must match canonical expected intent payload.
+        if "signature_hash" in signature and signature.get("signature_hash") is not None:
             expected_content = {
                 "intent": f"approve_submission_{submission_id}",
                 "signer_user_id": signature.get("signer_user_id"),
@@ -211,7 +239,10 @@ class ApprovalService:
             }
             expected_hash = compute_hash(expected_content)
             if signature["signature_hash"] != expected_hash:
-                raise SignatureError("Signature hash validation failed", {"expected_hash": expected_hash, "provided_hash": signature["signature_hash"]})
+                raise SignatureError(
+                    "Signature hash validation failed",
+                    {"expected_hash": expected_hash, "provided_hash": signature["signature_hash"]},
+                )
 
         if required_preconditions and "latest_validation_run_id" in required_preconditions:
             cursor = self.db.execute(
