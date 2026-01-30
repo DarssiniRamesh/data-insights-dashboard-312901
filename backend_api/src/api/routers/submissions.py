@@ -2,8 +2,9 @@
 PUBLIC_INTERFACE
 Submissions router for data product submission and approval workflow.
 """
-from fastapi import APIRouter, HTTPException, Security
+from fastapi import APIRouter, HTTPException, Security, Body
 from fastapi.security import HTTPAuthorizationCredentials
+from pydantic import ValidationError
 
 from database import get_connection
 from schemas import (
@@ -56,7 +57,7 @@ router = APIRouter(
 )
 async def create_submission(
     user=Security(get_current_user_dep),
-    request: CreateSubmissionRequest = None,
+    payload: dict = Body(default=None),
 ) -> CreateSubmissionResponse:
     """
     PUBLIC_INTERFACE
@@ -64,14 +65,42 @@ async def create_submission(
 
     Important: Authentication must be evaluated before request body validation so that
     missing/invalid Authorization headers return HTTP 401 (not 422).
+
+    Implementation note:
+      - We accept a raw dict payload and validate it *after* auth succeeds.
+      - This ensures `/api/v1/submissions` returns 401 on missing/invalid token
+        even if the request body is malformed.
     """
     # `user` is resolved via dependency first; if auth is missing/invalid it will raise 401 here.
     db = get_connection()
 
+    # Deterministic correlation id even if payload is missing/invalid
+    correlation_id = generate_id("req")
     try:
-        # Defensive: FastAPI should always provide request, but keep a clear error.
-        if request is None:
-            raise HTTPException(status_code=400, detail=make_error_response("INVALID_REQUEST", "Missing request body", generate_id("req")))
+        if payload and isinstance(payload, dict):
+            ac = payload.get("audit_context") or {}
+            if isinstance(ac, dict) and ac.get("client_request_id"):
+                correlation_id = ac["client_request_id"]
+    except Exception:
+        pass
+
+    try:
+        if payload is None:
+            raise HTTPException(
+                status_code=400,
+                detail=make_error_response("INVALID_REQUEST", "Missing request body", correlation_id),
+            )
+
+        try:
+            request = CreateSubmissionRequest.model_validate(payload)
+        except ValidationError as ve:
+            raise HTTPException(
+                status_code=422,
+                detail={"detail": ve.errors()},
+            )
+
+        # Now safe to use validated audit_context
+        correlation_id = request.audit_context.client_request_id
 
         if request.audit_context.actor_user_id != user["user_id"]:
             raise HTTPException(
@@ -79,7 +108,7 @@ async def create_submission(
                 detail=make_error_response(
                     "AUTHORIZATION_FAILED",
                     "audit_context.actor_user_id must match authenticated user",
-                    request.audit_context.client_request_id,
+                    correlation_id,
                     {"expected": user["user_id"], "provided": request.audit_context.actor_user_id},
                 ),
             )
@@ -90,7 +119,7 @@ async def create_submission(
                 detail=make_error_response(
                     "AUTHORIZATION_FAILED",
                     "audit_context.actor_role must match authenticated user role",
-                    request.audit_context.client_request_id,
+                    correlation_id,
                     {"expected": user["role"], "provided": request.audit_context.actor_role},
                 ),
             )
@@ -100,7 +129,7 @@ async def create_submission(
             draft_id=request.draft_id,
             actor_user_id=user["user_id"],
             actor_role=user["role"],
-            correlation_id=request.audit_context.client_request_id,
+            correlation_id=correlation_id,
         )
 
         return CreateSubmissionResponse(**result)
@@ -108,7 +137,7 @@ async def create_submission(
     except ValueError as e:
         raise HTTPException(
             status_code=400,
-            detail=make_error_response("INVALID_REQUEST", str(e), request.audit_context.client_request_id),
+            detail=make_error_response("INVALID_REQUEST", str(e), correlation_id),
         )
     except HTTPException:
         raise
@@ -118,7 +147,7 @@ async def create_submission(
             detail=make_error_response(
                 "INTERNAL_ERROR",
                 f"Failed to create submission: {str(e)}",
-                request.audit_context.client_request_id,
+                correlation_id,
             ),
         )
 
