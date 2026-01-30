@@ -20,8 +20,8 @@ For WebSocket usage examples, see the /docs/websocket-usage endpoint.
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from src.api.routers import drafts, submissions, validation, audit, evidence, auth
-from src.database import init_db, seed_test_users
+from api.routers import drafts, submissions, validation, audit, evidence, auth
+from database import init_db, seed_test_users
 
 # OpenAPI metadata
 openapi_tags = [

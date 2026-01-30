@@ -26,7 +26,7 @@ def app():
 
     Note: current codebase only exposes `src.api.main:app`.
     """
-    from src.api.main import app as fastapi_app
+    from api.main import app as fastapi_app
 
     return fastapi_app
 

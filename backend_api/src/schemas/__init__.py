@@ -72,7 +72,7 @@ class DataProductPackage(BaseModel):
     """Data product package definition."""
     product: ProductMetadata
     dataset: DatasetReference
-    schema: SchemaDefinition
+    schema_definition: Optional[SchemaDefinition] = None
     controls: ControlsMetadata
     sop_references: List[str] = []
 
