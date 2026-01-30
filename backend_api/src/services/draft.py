@@ -3,7 +3,7 @@ PUBLIC_INTERFACE
 Draft service for managing data product drafts.
 """
 import json
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 from src.utils import generate_id, utc_now_iso
 from src.services.audit import AuditService
 

@@ -76,8 +76,12 @@ app.include_router(evidence.router)
 @app.on_event("startup")
 async def startup_event():
     """Initialize database and seed test users on startup."""
-    init_db()
-    seed_test_users()
+    try:
+        init_db()
+        seed_test_users()
+    except Exception as e:
+        print(f"Warning: Database initialization failed: {e}")
+        print("Application will continue but database operations may fail.")
 
 
 @app.get("/", tags=["health"])
@@ -88,6 +92,16 @@ def health_check():
     Returns basic health status for readiness probes.
     """
     return {"message": "Healthy"}
+
+
+@app.get("/health", tags=["health"])
+def health_endpoint():
+    """
+    Health check endpoint.
+    
+    Returns basic health status for readiness probes.
+    """
+    return {"status": "ok"}
 
 
 @app.get("/docs/websocket-usage", tags=["documentation"])
