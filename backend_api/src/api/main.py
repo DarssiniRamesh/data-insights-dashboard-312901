@@ -18,11 +18,22 @@ Real-time WebSocket endpoints:
 For WebSocket usage examples, see the /docs/websocket-usage endpoint.
 """
 from contextlib import asynccontextmanager
+import logging
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from api.routers import drafts, submissions, validation, audit, evidence, auth, submissions_compat
-from database import init_db, seed_test_users
+logger = logging.getLogger("backend_api")
+
+# Support both launch modes:
+#  - uvicorn api.main:app (pythonpath includes "src")
+#  - uvicorn src.api.main:app (imports as a package)
+try:
+    from .routers import drafts, submissions, validation, audit, evidence, auth, submissions_compat
+    from ..database import init_db, seed_test_users
+except ImportError:  # pragma: no cover
+    from api.routers import drafts, submissions, validation, audit, evidence, auth, submissions_compat
+    from database import init_db, seed_test_users
 
 
 @asynccontextmanager
@@ -32,12 +43,13 @@ async def lifespan(app: FastAPI):
     try:
         init_db()
         seed_test_users()
-    except Exception as e:
-        print(f"Warning: Database initialization failed: {e}")
-        print("Application will continue but database operations may fail.")
-    
+        logger.info("Database initialization and seeding completed.")
+    except Exception:
+        # Non-fatal: boot should not be blocked by non-critical DB issues.
+        logger.exception("Database initialization failed; continuing to boot (endpoints may error).")
+
     yield
-    
+
     # Shutdown (if needed in future)
     pass
 

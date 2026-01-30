@@ -1,11 +1,14 @@
 """
 Database module for SQLite connection and initialization.
 """
+import logging
+import os
 import sqlite3
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Optional
-import os
-from datetime import datetime, UTC
+
+logger = logging.getLogger("backend_api.db")
 
 _connection: Optional[sqlite3.Connection] = None
 
@@ -22,7 +25,11 @@ def _ensure_system_user(conn: sqlite3.Connection) -> None:
     won't fail with FK violations.
     """
     # Import locally to avoid import cycles at module import time.
-    from services.auth import AuthService
+    # Support both import roots: services.auth (pythonpath=src) and src.services.auth (package import)
+    try:
+        from services.auth import AuthService
+    except ImportError:  # pragma: no cover
+        from ..services.auth import AuthService
 
     cursor = conn.execute("SELECT user_id, username, roles, is_active FROM users WHERE user_id = ?", ("system",))
     row = cursor.fetchone()
@@ -61,8 +68,18 @@ def _ensure_system_user(conn: sqlite3.Connection) -> None:
 
 def get_db_path() -> str:
     """Get the SQLite database path from environment or use default."""
-    db_path = os.getenv("SQLITE_DB_PATH", "data/app.db")
-    Path(db_path).parent.mkdir(parents=True, exist_ok=True)
+    db_path = os.getenv("SQLITE_DB_PATH", "").strip()
+    if not db_path:
+        db_path = "data/app.db"
+
+    # Create parent dir so sqlite can create/open the file cleanly
+    try:
+        Path(db_path).parent.mkdir(parents=True, exist_ok=True)
+    except Exception:
+        logger.exception("Failed creating SQLite DB parent directory for path=%s; falling back to data/app.db", db_path)
+        db_path = "data/app.db"
+        Path(db_path).parent.mkdir(parents=True, exist_ok=True)
+
     return db_path
 
 
@@ -300,8 +317,12 @@ def seed_test_users():
     # Ensure system user is always present (audit FK safety).
     _ensure_system_user(conn)
     
-    # Import auth service for password hashing
-    from services.auth import AuthService
+    # Import auth service for password hashing (support both import roots)
+    try:
+        from services.auth import AuthService
+    except ImportError:  # pragma: no cover
+        from ..services.auth import AuthService
+
     auth_service = AuthService(conn)
     
     # Seed users with default password "Passw0rd!"
