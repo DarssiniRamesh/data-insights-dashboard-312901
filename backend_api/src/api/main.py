@@ -30,23 +30,40 @@ logger = logging.getLogger("backend_api")
 #  - uvicorn src.api.main:app (imports as a package)
 try:
     from .routers import drafts, submissions, validation, audit, evidence, auth, submissions_compat
-    from ..database import init_db, seed_test_users
+    from ..database import init_db, seed_test_users, db_status
 except ImportError:  # pragma: no cover
     from api.routers import drafts, submissions, validation, audit, evidence, auth, submissions_compat
-    from database import init_db, seed_test_users
+    from database import init_db, seed_test_users, db_status
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Lifespan context manager for startup and shutdown events."""
+    """Lifespan context manager for startup and shutdown events.
+
+    Startup behavior requirements:
+    - Initialize DB schema and seed required users (including 'system') if possible.
+    - Never crash the server if DB is misconfigured/unavailable; run in degraded mode.
+    """
     # Startup
+    app.state.db_initialized = False
+    app.state.db_seeded = False
+
     try:
         init_db()
-        seed_test_users()
-        logger.info("Database initialization and seeding completed.")
+        app.state.db_initialized = True
+        logger.info("Database schema initialization completed.")
     except Exception:
-        # Non-fatal: boot should not be blocked by non-critical DB issues.
-        logger.exception("Database initialization failed; continuing to boot (endpoints may error).")
+        # Non-fatal: boot should not be blocked by DB issues.
+        logger.exception("Database initialization failed; continuing to boot (degraded mode).")
+
+    # Seed only if init_db succeeded (avoids confusing cascaded errors).
+    if app.state.db_initialized:
+        try:
+            seed_test_users()
+            app.state.db_seeded = True
+            logger.info("Database seeding completed.")
+        except Exception:
+            logger.exception("Database seeding failed; continuing to boot (degraded mode).")
 
     yield
 
@@ -112,24 +129,58 @@ app.include_router(evidence.router)
 app.include_router(submissions_compat.router)
 
 
-@app.get("/", tags=["health"])
+# PUBLIC_INTERFACE
+@app.get("/", tags=["health"], summary="Health Check", description="Liveness probe (DB-independent).")
 def health_check():
     """
-    Health check endpoint.
-    
-    Returns basic health status for readiness probes.
-    """
-    return {"message": "Healthy"}
+    Health check endpoint (liveness).
 
-
-@app.get("/health", tags=["health"])
-def health_endpoint():
-    """
-    Health check endpoint.
-    
-    Returns basic health status for readiness probes.
+    Returns basic health status without touching dependencies (e.g., DB), so the
+    service can report liveness even in degraded mode.
     """
     return {"status": "ok"}
+
+
+# PUBLIC_INTERFACE
+@app.get("/health", tags=["health"], summary="Health Endpoint", description="Liveness probe (DB-independent).")
+def health_endpoint():
+    """
+    Health endpoint (liveness).
+
+    Returns JSON {"status":"ok"} and does not depend on DB connectivity.
+    """
+    return {"status": "ok"}
+
+
+# PUBLIC_INTERFACE
+@app.get(
+    "/ready",
+    tags=["health"],
+    summary="Readiness Endpoint",
+    description="Readiness probe (touches DB). Returns 200 only when DB is reachable.",
+)
+def readiness_endpoint():
+    """
+    Readiness endpoint (DB-dependent).
+
+    This is intended for environments that want a stronger signal than /health.
+    It checks whether the DB connection can be established and a trivial query succeeds.
+
+    Returns:
+      - 200 when DB is reachable
+      - 503 when DB is not ready
+    """
+    ok, path, degraded = db_status()
+    if ok:
+        return {"status": "ready", "db": {"ok": True, "path": path, "degraded": degraded}}
+    # Keep response shape stable for callers
+    from fastapi import Response, status
+
+    return Response(
+        content='{"status":"not_ready","db":{"ok":false}}',
+        media_type="application/json",
+        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+    )
 
 
 @app.get("/docs/websocket-usage", tags=["documentation"])

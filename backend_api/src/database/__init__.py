@@ -1,16 +1,53 @@
 """
 Database module for SQLite connection and initialization.
+
+Key design goals for preview/runtime robustness:
+- App must boot even if SQLITE_DB_PATH is missing/invalid/unwritable.
+- Default DB path must be deterministic and writable relative to container root.
+- Provide a lightweight readiness check that can touch DB.
 """
 import logging
 import os
 import sqlite3
+import tempfile
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Tuple
 
 logger = logging.getLogger("backend_api.db")
 
 _connection: Optional[sqlite3.Connection] = None
+_db_degraded_mode: bool = False
+_db_effective_path: Optional[str] = None
+
+
+def _default_db_path() -> str:
+    """
+    Compute a deterministic default DB path under the container root.
+
+    We avoid relying on process working directory (which can differ between
+    pytest, uvicorn, and preview environments).
+    """
+    container_root = Path(__file__).resolve().parents[3]  # .../backend_api
+    return str(container_root / "data" / "app.db")
+
+
+def _fallback_db_path() -> str:
+    """Return a writable fallback path in /tmp."""
+    return str(Path(tempfile.gettempdir()) / "backend_api" / "app.db")
+
+
+def _connect_sqlite(db_path: str) -> sqlite3.Connection:
+    """Create a SQLite connection and enforce baseline pragmas."""
+    conn = sqlite3.connect(db_path, check_same_thread=False)
+    conn.execute("PRAGMA foreign_keys = ON;")
+    conn.row_factory = sqlite3.Row
+    return conn
+
+
+def _ensure_parent_dir(db_path: str) -> None:
+    """Ensure the parent directory exists for db_path."""
+    Path(db_path).parent.mkdir(parents=True, exist_ok=True)
 
 
 def _ensure_system_user(conn: sqlite3.Connection) -> None:
@@ -23,6 +60,8 @@ def _ensure_system_user(conn: sqlite3.Connection) -> None:
 
     The function is idempotent and commits immediately so subsequent audit writes
     won't fail with FK violations.
+
+    Important: This function must not crash if called before the `users` table exists.
     """
     # Import locally to avoid import cycles at module import time.
     # Support both import roots: services.auth (pythonpath=src) and src.services.auth (package import)
@@ -31,7 +70,16 @@ def _ensure_system_user(conn: sqlite3.Connection) -> None:
     except ImportError:  # pragma: no cover
         from ..services.auth import AuthService
 
-    cursor = conn.execute("SELECT user_id, username, roles, is_active FROM users WHERE user_id = ?", ("system",))
+    try:
+        cursor = conn.execute(
+            "SELECT user_id, username, roles, is_active FROM users WHERE user_id = ?",
+            ("system",),
+        )
+    except sqlite3.OperationalError:
+        # users table not created yet. init_db() will call us again after table creation.
+        logger.warning("Cannot ensure system user because users table does not exist yet.")
+        return
+
     row = cursor.fetchone()
 
     desired_roles = "system,admin"  # includes 'admin' per requirements; 'system' is informational for DB only
@@ -66,48 +114,98 @@ def _ensure_system_user(conn: sqlite3.Connection) -> None:
     conn.commit()
 
 
+# PUBLIC_INTERFACE
 def get_db_path() -> str:
-    """Get the SQLite database path from environment or use default."""
+    """Get the SQLite database path from environment or use a safe default."""
     db_path = os.getenv("SQLITE_DB_PATH", "").strip()
     if not db_path:
-        db_path = "data/app.db"
+        db_path = _default_db_path()
 
-    # Create parent dir so sqlite can create/open the file cleanly
-    try:
-        Path(db_path).parent.mkdir(parents=True, exist_ok=True)
-    except Exception:
-        logger.exception("Failed creating SQLite DB parent directory for path=%s; falling back to data/app.db", db_path)
-        db_path = "data/app.db"
-        Path(db_path).parent.mkdir(parents=True, exist_ok=True)
-
+    # Create parent dir so sqlite can create/open the file cleanly.
+    # If this fails, caller may choose to fallback to /tmp.
+    _ensure_parent_dir(db_path)
     return db_path
 
 
+# PUBLIC_INTERFACE
 def get_connection() -> sqlite3.Connection:
-    """Get or create SQLite connection with foreign keys enabled."""
-    global _connection
-    if _connection is None:
-        db_path = get_db_path()
-        _connection = sqlite3.connect(db_path, check_same_thread=False)
-        _connection.execute("PRAGMA foreign_keys = ON;")
-        _connection.row_factory = sqlite3.Row
+    """
+    Get or create SQLite connection with foreign keys enabled.
+
+    If the configured DB path is invalid/unwritable, falls back to an in-memory DB
+    (degraded mode) so the API can still boot and serve /health.
+    """
+    global _connection, _db_degraded_mode, _db_effective_path
+
+    if _connection is not None:
+        return _connection
+
+    primary_path: Optional[str] = None
+
+    # First attempt: env/default path
+    try:
+        primary_path = get_db_path()
+        _connection = _connect_sqlite(primary_path)
+        _db_effective_path = primary_path
+        _db_degraded_mode = False
+        return _connection
+    except Exception:
+        logger.exception("Failed opening SQLite DB at path=%s", primary_path)
+
+    # Second attempt: writable /tmp location (still persistent within container FS)
+    fallback_path: Optional[str] = None
+    try:
+        fallback_path = _fallback_db_path()
+        _ensure_parent_dir(fallback_path)
+        _connection = _connect_sqlite(fallback_path)
+        _db_effective_path = fallback_path
+        _db_degraded_mode = True
+        logger.warning("DB running in degraded mode using fallback path=%s", fallback_path)
+        return _connection
+    except Exception:
+        logger.exception("Failed opening SQLite DB fallback path=%s", fallback_path)
+
+    # Final attempt: in-memory
+    _connection = _connect_sqlite(":memory:")
+    _db_effective_path = ":memory:"
+    _db_degraded_mode = True
+    logger.warning("DB running in degraded mode using in-memory SQLite.")
     return _connection
 
 
-def close_connection():
-    """Close the database connection."""
+# PUBLIC_INTERFACE
+def close_connection() -> None:
+    """Close the database connection (if any)."""
     global _connection
     if _connection:
         _connection.close()
         _connection = None
 
 
-def init_db():
+# PUBLIC_INTERFACE
+def db_status() -> Tuple[bool, str, bool]:
+    """
+    Return (ok, path, degraded_mode) without raising.
+
+    ok=True means a connection can be created and a trivial query succeeds.
+    """
+    try:
+        conn = get_connection()
+        conn.execute("SELECT 1;")
+        return True, _db_effective_path or "", _db_degraded_mode
+    except Exception:
+        logger.exception("DB status check failed.")
+        return False, _db_effective_path or "", True
+
+
+# PUBLIC_INTERFACE
+def init_db() -> None:
     """Initialize database schema."""
     conn = get_connection()
-    
+
     # Users table with authentication fields
-    conn.execute("""
+    conn.execute(
+        """
     CREATE TABLE IF NOT EXISTS users (
         user_id TEXT PRIMARY KEY,
         username TEXT UNIQUE NOT NULL,
@@ -119,16 +217,18 @@ def init_db():
         display_name TEXT,
         role TEXT
     );
-    """)
-    
+    """
+    )
+
     # Create index on username for fast lookups
     conn.execute("CREATE INDEX IF NOT EXISTS idx_users_username ON users(username);")
 
     # Ensure deterministic system user exists before any audit events can be written.
     _ensure_system_user(conn)
-    
+
     # Drafts table
-    conn.execute("""
+    conn.execute(
+        """
     CREATE TABLE IF NOT EXISTS drafts (
         draft_id TEXT PRIMARY KEY,
         package_id TEXT NOT NULL,
@@ -140,10 +240,12 @@ def init_db():
         updated_at_utc TEXT NOT NULL,
         FOREIGN KEY(created_by_user_id) REFERENCES users(user_id)
     );
-    """)
-    
+    """
+    )
+
     # Submissions table
-    conn.execute("""
+    conn.execute(
+        """
     CREATE TABLE IF NOT EXISTS submissions (
         submission_id TEXT PRIMARY KEY,
         draft_id TEXT NOT NULL,
@@ -157,10 +259,12 @@ def init_db():
         FOREIGN KEY(draft_id) REFERENCES drafts(draft_id),
         FOREIGN KEY(submitter_user_id) REFERENCES users(user_id)
     );
-    """)
-    
+    """
+    )
+
     # Pipeline jobs table
-    conn.execute("""
+    conn.execute(
+        """
     CREATE TABLE IF NOT EXISTS pipeline_jobs (
         pipeline_job_id TEXT PRIMARY KEY,
         submission_id TEXT NOT NULL,
@@ -174,10 +278,12 @@ def init_db():
         finished_at_utc TEXT,
         FOREIGN KEY(submission_id) REFERENCES submissions(submission_id)
     );
-    """)
-    
+    """
+    )
+
     # Artifacts table
-    conn.execute("""
+    conn.execute(
+        """
     CREATE TABLE IF NOT EXISTS artifacts (
         artifact_id TEXT PRIMARY KEY,
         artifact_type TEXT NOT NULL CHECK (artifact_type IN ('validation_report','evidence_manifest','approval_record','audit_excerpt','deviation_record')),
@@ -186,10 +292,12 @@ def init_db():
         hash_sha256 TEXT NOT NULL,
         created_at_utc TEXT NOT NULL
     );
-    """)
-    
+    """
+    )
+
     # Validation runs table
-    conn.execute("""
+    conn.execute(
+        """
     CREATE TABLE IF NOT EXISTS validation_runs (
         validation_run_id TEXT PRIMARY KEY,
         submission_id TEXT NOT NULL,
@@ -203,10 +311,12 @@ def init_db():
         FOREIGN KEY(submission_id) REFERENCES submissions(submission_id),
         FOREIGN KEY(report_artifact_id) REFERENCES artifacts(artifact_id)
     );
-    """)
-    
+    """
+    )
+
     # Review logs table
-    conn.execute("""
+    conn.execute(
+        """
     CREATE TABLE IF NOT EXISTS review_logs (
         review_log_id TEXT PRIMARY KEY,
         submission_id TEXT NOT NULL,
@@ -216,10 +326,12 @@ def init_db():
         FOREIGN KEY(submission_id) REFERENCES submissions(submission_id),
         FOREIGN KEY(reviewer_user_id) REFERENCES users(user_id)
     );
-    """)
-    
+    """
+    )
+
     # Approval records table
-    conn.execute("""
+    conn.execute(
+        """
     CREATE TABLE IF NOT EXISTS approval_records (
         approval_record_id TEXT PRIMARY KEY,
         submission_id TEXT NOT NULL,
@@ -230,10 +342,12 @@ def init_db():
         FOREIGN KEY(submission_id) REFERENCES submissions(submission_id),
         FOREIGN KEY(approver_user_id) REFERENCES users(user_id)
     );
-    """)
-    
+    """
+    )
+
     # Deviations table
-    conn.execute("""
+    conn.execute(
+        """
     CREATE TABLE IF NOT EXISTS deviations (
         deviation_id TEXT PRIMARY KEY,
         submission_id TEXT NOT NULL,
@@ -251,10 +365,12 @@ def init_db():
         FOREIGN KEY(requested_by_user_id) REFERENCES users(user_id),
         FOREIGN KEY(secondary_approver_user_id) REFERENCES users(user_id)
     );
-    """)
-    
+    """
+    )
+
     # Evidence packages table
-    conn.execute("""
+    conn.execute(
+        """
     CREATE TABLE IF NOT EXISTS evidence_packages (
         evidence_package_id TEXT PRIMARY KEY,
         submission_id TEXT NOT NULL,
@@ -266,10 +382,12 @@ def init_db():
         FOREIGN KEY(submission_id) REFERENCES submissions(submission_id),
         FOREIGN KEY(manifest_artifact_id) REFERENCES artifacts(artifact_id)
     );
-    """)
-    
+    """
+    )
+
     # Audit events table
-    conn.execute("""
+    conn.execute(
+        """
     CREATE TABLE IF NOT EXISTS audit_events (
         audit_event_id TEXT PRIMARY KEY,
         event_type TEXT NOT NULL,
@@ -283,10 +401,12 @@ def init_db():
         details_json TEXT,
         FOREIGN KEY(actor_user_id) REFERENCES users(user_id)
     );
-    """)
-    
+    """
+    )
+
     # Monitoring events table
-    conn.execute("""
+    conn.execute(
+        """
     CREATE TABLE IF NOT EXISTS monitoring_events (
         monitoring_event_id TEXT PRIMARY KEY,
         package_id TEXT NOT NULL,
@@ -296,8 +416,9 @@ def init_db():
         details_json TEXT,
         created_at_utc TEXT NOT NULL
     );
-    """)
-    
+    """
+    )
+
     # Create indexes
     conn.execute("CREATE INDEX IF NOT EXISTS idx_submissions_package ON submissions(package_id, package_version);")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_submissions_state ON submissions(state);")
@@ -306,17 +427,18 @@ def init_db():
     conn.execute("CREATE INDEX IF NOT EXISTS idx_audit_events_entity ON audit_events(entity_type, entity_id, timestamp_utc);")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_evidence_packages_submission ON evidence_packages(submission_id);")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_monitoring_events_package ON monitoring_events(package_id, package_version, created_at_utc);")
-    
+
     conn.commit()
 
 
-def seed_test_users():
+# PUBLIC_INTERFACE
+def seed_test_users() -> None:
     """Seed test users for development and testing with authentication."""
     conn = get_connection()
 
     # Ensure system user is always present (audit FK safety).
     _ensure_system_user(conn)
-    
+
     # Import auth service for password hashing (support both import roots)
     try:
         from services.auth import AuthService
@@ -324,7 +446,7 @@ def seed_test_users():
         from ..services.auth import AuthService
 
     auth_service = AuthService(conn)
-    
+
     # Seed users with default password "Passw0rd!"
     test_users = [
         ("submitter1", "Passw0rd!", ["submitter"], "Submitter User"),
@@ -334,33 +456,34 @@ def seed_test_users():
         ("admin1", "Passw0rd!", ["admin"], "Admin User"),
         ("multi_role", "Passw0rd!", ["submitter", "reviewer"], "Multi-Role User"),
     ]
-    
+
     for username, password, roles, display_name in test_users:
         try:
             # Check if user exists
             cursor = conn.execute("SELECT user_id FROM users WHERE username = ?", (username,))
             if cursor.fetchone():
                 continue
-            
+
             # Hash password
             pwd_hash, salt = auth_service.hash_password(password)
-            
+
             # Generate user ID
             import uuid
+
             user_id = f"u-{str(uuid.uuid4())[:8]}"
             created_at = datetime.now(UTC).isoformat().replace("+00:00", "Z")
-            roles_str = ','.join(roles)
-            
+            roles_str = ",".join(roles)
+
             # For backward compatibility, set role to first role
             primary_role = roles[0] if roles else "submitter"
-            
+
             # Insert user
             conn.execute(
                 """INSERT INTO users(user_id, username, password_hash, password_salt, roles, is_active, created_at, display_name, role)
                    VALUES(?,?,?,?,?,?,?,?,?)""",
-                (user_id, username, pwd_hash, salt, roles_str, True, created_at, display_name, primary_role)
+                (user_id, username, pwd_hash, salt, roles_str, True, created_at, display_name, primary_role),
             )
         except sqlite3.IntegrityError:
             pass
-    
+
     conn.commit()
