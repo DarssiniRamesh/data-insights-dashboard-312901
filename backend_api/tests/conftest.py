@@ -19,12 +19,61 @@ if _SRC_DIR.exists():
     sys.path.insert(0, str(_SRC_DIR))
 
 
+@pytest.fixture(scope="session", autouse=True)
+def _isolated_sqlite_db_for_tests() -> Iterator[str]:
+    """
+    Ensure tests never use the persisted repository DB.
+
+    Why:
+      - The repo contains backend_api/data/app.db which may already include rows.
+      - Some API contract tests create a submission using a deterministic
+        name/version; if the persisted DB is used, this can return 409 conflicts.
+      - Test runs must be isolated and repeatable (GxP dev compliance expectation).
+
+    Implementation:
+      - Create a temporary SQLite file and point SQLITE_DB_PATH at it for the
+        duration of the pytest session.
+      - If the database module was imported earlier, close its global connection
+        so subsequent calls will use the new path.
+    """
+    fd, path = tempfile.mkstemp(prefix="backend_api_test_", suffix=".sqlite3")
+    os.close(fd)
+
+    old_path = os.environ.get("SQLITE_DB_PATH")
+    os.environ["SQLITE_DB_PATH"] = path
+
+    # Best-effort: reset any already-open singleton connection.
+    try:
+        import database  # type: ignore
+
+        if hasattr(database, "close_connection"):
+            database.close_connection()
+    except Exception:
+        # Non-fatal: if not importable yet, it will pick up SQLITE_DB_PATH later.
+        pass
+
+    try:
+        yield path
+    finally:
+        if old_path is None:
+            os.environ.pop("SQLITE_DB_PATH", None)
+        else:
+            os.environ["SQLITE_DB_PATH"] = old_path
+
+        try:
+            os.remove(path)
+        except FileNotFoundError:
+            pass
+
+
 @pytest.fixture(scope="session")
 def app():
     """
     Provides the FastAPI app instance.
 
-    Note: current codebase only exposes `src.api.main:app`.
+    Note:
+      - Lifespan startup must run for schema init + required seed users
+        (including deterministic 'system' user for audit FK safety).
     """
     from api.main import app as fastapi_app
 
@@ -36,8 +85,12 @@ async def async_client(app) -> AsyncIterator[AsyncClient]:
     """
     HTTPX AsyncClient bound to the ASGI app, enabling API tests without
     running an external uvicorn server.
+
+    IMPORTANT:
+      - Enable ASGI lifespan so FastAPI startup/shutdown events run.
+        This ensures init_db()/seed_test_users() execute during tests.
     """
-    transport = ASGITransport(app=app)
+    transport = ASGITransport(app=app, lifespan="on")
     async with AsyncClient(transport=transport, base_url="http://testserver") as client:
         yield client
 
@@ -45,10 +98,10 @@ async def async_client(app) -> AsyncIterator[AsyncClient]:
 @pytest.fixture()
 def temp_sqlite_path() -> Iterator[str]:
     """
-    Temporary SQLite DB file path for integration tests.
+    Temporary SQLite DB file path (kept for compatibility with existing tests).
 
-    The current backend implementation does not yet use SQLite; this fixture is
-    provided for future repository/service tests and integration tests.
+    Some tests accept this fixture but don't use it directly; it remains useful
+    for future integration tests that need their own DB file.
     """
     fd, path = tempfile.mkstemp(prefix="test_", suffix=".sqlite3")
     os.close(fd)
