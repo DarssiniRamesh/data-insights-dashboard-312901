@@ -2,7 +2,7 @@ import pytest
 
 
 @pytest.mark.api
-@pytest.mark.asyncio
+@pytest.mark.anyio
 async def test_health_check_root_returns_healthy(async_client):
     """
     FRD-BASE-HEALTH: Service exposes a basic health endpoint for readiness checks.
@@ -14,7 +14,7 @@ async def test_health_check_root_returns_healthy(async_client):
 
 
 @pytest.mark.api
-@pytest.mark.asyncio
+@pytest.mark.anyio
 async def test_health_check_root_disallows_post(async_client):
     """
     NFR-SEC-HTTP: Endpoint should not accept unsupported methods.

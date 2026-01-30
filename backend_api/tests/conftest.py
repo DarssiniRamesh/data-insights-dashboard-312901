@@ -1,9 +1,22 @@
 import os
+import sys
 import tempfile
 from collections.abc import AsyncIterator, Iterator
+from pathlib import Path
 
 import pytest
 from httpx import ASGITransport, AsyncClient
+
+# Ensure backend_api/src is importable in test runs.
+#
+# Rationale:
+# - pytest.ini contains `pythonpath = src`, but that setting requires
+#   pytest's python_path support to be active; in some environments it is not.
+# - We keep this fix test-only (per instructions not to modify app code).
+_BACKEND_ROOT = Path(__file__).resolve().parents[1]
+_SRC_DIR = _BACKEND_ROOT / "src"
+if _SRC_DIR.exists():
+    sys.path.insert(0, str(_SRC_DIR))
 
 
 @pytest.fixture(scope="session")
