@@ -17,11 +17,29 @@ Real-time WebSocket endpoints:
 
 For WebSocket usage examples, see the /docs/websocket-usage endpoint.
 """
+from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from api.routers import drafts, submissions, validation, audit, evidence, auth
 from database import init_db, seed_test_users
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Lifespan context manager for startup and shutdown events."""
+    # Startup
+    try:
+        init_db()
+        seed_test_users()
+    except Exception as e:
+        print(f"Warning: Database initialization failed: {e}")
+        print("Application will continue but database operations may fail.")
+    
+    yield
+    
+    # Shutdown (if needed in future)
+    pass
 
 # OpenAPI metadata
 openapi_tags = [
@@ -57,7 +75,8 @@ app = FastAPI(
     version="1.0.0",
     openapi_tags=openapi_tags,
     docs_url="/docs",
-    redoc_url="/redoc"
+    redoc_url="/redoc",
+    lifespan=lifespan
 )
 
 # CORS middleware
@@ -76,17 +95,6 @@ app.include_router(submissions.router)
 app.include_router(validation.router)
 app.include_router(audit.router)
 app.include_router(evidence.router)
-
-
-@app.on_event("startup")
-async def startup_event():
-    """Initialize database and seed test users on startup."""
-    try:
-        init_db()
-        seed_test_users()
-    except Exception as e:
-        print(f"Warning: Database initialization failed: {e}")
-        print("Application will continue but database operations may fail.")
 
 
 @app.get("/", tags=["health"])

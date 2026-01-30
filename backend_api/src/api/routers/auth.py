@@ -66,10 +66,15 @@ async def register_user(request: RegisterRequest) -> RegisterResponse:
     auth_service = AuthService(db)
     
     try:
-        allow_register = os.getenv("AUTH_ALLOW_REGISTER", "false").lower() == "true"
+        # Check if registration is allowed
+        allow_register = os.getenv("AUTH_ALLOW_REGISTER", "true").lower() == "true"
+        
+        # Count existing users
         cursor = db.execute("SELECT COUNT(*) as count FROM users")
         user_count = cursor.fetchone()["count"]
         
+        # Always allow first user registration (for initial setup)
+        # Otherwise check AUTH_ALLOW_REGISTER flag
         if not allow_register and user_count > 0:
             raise HTTPException(
                 status_code=403,
