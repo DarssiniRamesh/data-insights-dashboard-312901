@@ -8,6 +8,7 @@ from typing import Dict, Any, Optional
 from datetime import datetime, timedelta
 from src.utils import generate_id, utc_now_iso, compute_hash, canonical_json
 from src.services.audit import AuditService
+from src.services.evidence import EvidenceService
 
 
 class ApprovalError(Exception):
@@ -81,6 +82,7 @@ class ApprovalService:
     def __init__(self, db_connection):
         self.db = db_connection
         self.audit_service = AuditService(db_connection)
+        self.evidence_service = EvidenceService(db_connection)
     
     def create_esign_challenge(
         self,
@@ -453,6 +455,72 @@ class ApprovalService:
                 }
             )
             
+            # Create evidence package for approval
+            evidence_package_id = None
+            if decision == "publish":
+                # Collect evidence items for the approval
+                evidence_items = [
+                    {
+                        "type": "approval_record",
+                        "content": {
+                            "approval_record_id": approval_record_id,
+                            "submission_id": submission_id,
+                            "decision": decision,
+                            "approver_user_id": approver_user_id,
+                            "signature": signature,
+                            "created_at_utc": created_at_utc,
+                            "rationale": rationale
+                        }
+                    }
+                ]
+                
+                # Add validation report if preconditions included it
+                if required_preconditions and "latest_validation_run_id" in required_preconditions:
+                    val_run_id = required_preconditions["latest_validation_run_id"]
+                    cursor = self.db.execute(
+                        """
+                        SELECT vr.*, a.storage_ref 
+                        FROM validation_runs vr
+                        JOIN artifacts a ON vr.report_artifact_id = a.artifact_id
+                        WHERE vr.validation_run_id = ?
+                        """,
+                        (val_run_id,)
+                    )
+                    val_row = cursor.fetchone()
+                    if val_row:
+                        import json
+                        import os
+                        storage_ref = val_row["storage_ref"]
+                        if os.path.exists(storage_ref):
+                            with open(storage_ref, 'r') as f:
+                                validation_report = json.load(f)
+                            evidence_items.append({
+                                "type": "validation_report",
+                                "content": validation_report
+                            })
+                
+                # Create evidence package
+                evidence_result = self.evidence_service.create_evidence_package(
+                    submission_id=submission_id,
+                    package_id=submission["package_id"],
+                    package_version=submission["package_version"],
+                    evidence_items=evidence_items,
+                    actor_user_id="system",
+                    actor_role="system",
+                    correlation_id=correlation_id
+                )
+                
+                evidence_package_id = evidence_result["evidence_package_id"]
+                
+                # Link evidence to approval
+                self.evidence_service.link_evidence_to_approval(
+                    evidence_package_id=evidence_package_id,
+                    approval_record_id=approval_record_id,
+                    actor_user_id="system",
+                    actor_role="system",
+                    correlation_id=correlation_id
+                )
+            
             # Commit transaction
             self.db.commit()
             
@@ -468,6 +536,7 @@ class ApprovalService:
             if decision == "publish":
                 result["published_version_id"] = f"{submission['package_id']}-{submission['package_version']}"
                 result["published_at_utc"] = created_at_utc
+                result["evidence_package_id"] = evidence_package_id
             
             return result
         
