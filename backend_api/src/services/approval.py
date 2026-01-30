@@ -5,7 +5,7 @@ Approval service for managing submission approvals with SoD and e-sign validatio
 import json
 import hashlib
 from typing import Dict, Any, Optional
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from src.utils import generate_id, utc_now_iso, compute_hash, canonical_json
 from src.services.audit import AuditService
 from src.services.evidence import EvidenceService
@@ -211,7 +211,7 @@ class ApprovalService:
         
         # Validate signature timestamp is within allowed window
         signed_at = signature_block["signed_at_utc"]
-        current_time = datetime.utcnow()
+        current_time = datetime.now(timezone.utc)
         
         try:
             signed_time = datetime.fromisoformat(signed_at.replace("Z", ""))

@@ -1,7 +1,7 @@
 """
 Pydantic schemas for API request/response models.
 """
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional, List, Dict, Any, Literal
 from pydantic import BaseModel, Field
 

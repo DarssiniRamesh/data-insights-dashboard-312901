@@ -8,7 +8,7 @@ import base64
 import json
 import os
 from typing import Optional, Dict, Any, List
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from fastapi import HTTPException, Security
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 
@@ -99,7 +99,7 @@ class AuthService:
         Returns:
             Dict with access_token, token_type, expires_in
         """
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         exp = now + timedelta(minutes=TOKEN_EXPIRY_MINUTES)
         
         payload = {
@@ -163,7 +163,7 @@ class AuthService:
             payload = json.loads(payload_json)
             
             # Check expiration
-            now = int(datetime.utcnow().timestamp())
+            now = int(datetime.now(timezone.utc).timestamp())
             if payload.get('exp', 0) < now:
                 raise ValueError("Token expired")
             
@@ -256,7 +256,7 @@ class AuthService:
         # Generate user ID
         import uuid
         user_id = f"u-{str(uuid.uuid4())[:8]}"
-        created_at = datetime.utcnow().isoformat() + "Z"
+        created_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
         
         # Store user
         roles_str = ','.join(roles)

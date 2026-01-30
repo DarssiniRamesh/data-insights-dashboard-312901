@@ -4,7 +4,7 @@ Utility functions for the backend API.
 import uuid
 import json
 import hashlib
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Dict
 
 
@@ -15,8 +15,8 @@ def generate_id(prefix: str = "") -> str:
 
 
 def utc_now_iso() -> str:
-    """Get current UTC timestamp in ISO-8601 format."""
-    return datetime.utcnow().isoformat() + "Z"
+    """Get current UTC timestamp in ISO-8601 format with timezone awareness."""
+    return datetime.now(timezone.utc).replace(tzinfo=None).isoformat() + "Z"
 
 
 def canonical_json(data: Any) -> str:

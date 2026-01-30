@@ -5,6 +5,7 @@ import sqlite3
 from pathlib import Path
 from typing import Optional
 import os
+from datetime import datetime, timezone
 
 _connection: Optional[sqlite3.Connection] = None
 
@@ -243,7 +244,6 @@ def init_db():
 def seed_test_users():
     """Seed test users for development and testing with authentication."""
     conn = get_connection()
-    from datetime import datetime
     
     # Import auth service for password hashing
     from src.services.auth import AuthService
@@ -272,7 +272,7 @@ def seed_test_users():
             # Generate user ID
             import uuid
             user_id = f"u-{str(uuid.uuid4())[:8]}"
-            created_at = datetime.utcnow().isoformat() + "Z"
+            created_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
             roles_str = ','.join(roles)
             
             # For backward compatibility, set role to first role

@@ -32,6 +32,48 @@ class SimplifiedSubmissionPayload(BaseModel):
     audit_context: Optional[Dict[str, Any]] = None
 
 
+def get_or_create_test_user(db):
+    """Get or create a test user for anonymous requests."""
+    # Check if test user exists
+    cursor = db.execute("SELECT user_id, username, roles FROM users WHERE username = ?", ("test-user",))
+    row = cursor.fetchone()
+    
+    if row:
+        roles = row["roles"].split(',') if row["roles"] else ["submitter"]
+        return {
+            "user_id": row["user_id"],
+            "username": row["username"],
+            "role": roles[0],
+            "roles": roles
+        }
+    
+    # Create test user
+    from src.services.auth import AuthService
+    auth_service = AuthService(db)
+    
+    try:
+        user_data = auth_service.create_user("test-user", "Test123!", ["submitter"])
+        return {
+            "user_id": user_data["user_id"],
+            "username": user_data["username"],
+            "role": "submitter",
+            "roles": ["submitter"]
+        }
+    except:
+        # If creation fails, try to get again (race condition)
+        cursor = db.execute("SELECT user_id, username, roles FROM users WHERE username = ?", ("test-user",))
+        row = cursor.fetchone()
+        if row:
+            roles = row["roles"].split(',') if row["roles"] else ["submitter"]
+            return {
+                "user_id": row["user_id"],
+                "username": row["username"],
+                "role": roles[0],
+                "roles": roles
+            }
+        raise
+
+
 @router.post("/submissions", status_code=201)
 async def create_submission_compat(
     payload: SimplifiedSubmissionPayload,
@@ -50,7 +92,7 @@ async def create_submission_compat(
     db = get_connection()
     auth_service = AuthService(db)
     
-    # Authenticate if credentials provided, otherwise create anonymous user for tests
+    # Authenticate if credentials provided, otherwise use test user
     if credentials:
         try:
             user = auth_service.get_current_user(credentials)
@@ -60,14 +102,8 @@ async def create_submission_compat(
                 detail=make_error_response("AUTHENTICATION_FAILED", "Invalid credentials", generate_id("req"))
             )
     else:
-        # For test compatibility: allow anonymous submissions in test mode
-        # In production, this would require authentication
-        user = {
-            "user_id": "test-user",
-            "username": "test-user",
-            "role": "submitter",
-            "roles": ["submitter"]
-        }
+        # For test compatibility: use test user
+        user = get_or_create_test_user(db)
     
     try:
         # Determine if this is a simplified payload or full payload
