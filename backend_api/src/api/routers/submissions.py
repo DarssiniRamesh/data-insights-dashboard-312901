@@ -27,7 +27,7 @@ from services.approval import (
     SignatureError,
     InvalidStateError,
 )
-from services.auth import AuthService, security
+from services.auth import AuthService, security, get_current_user_dep
 from utils import make_error_response, generate_id
 
 router = APIRouter(
@@ -55,18 +55,23 @@ router = APIRouter(
     },
 )
 async def create_submission(
-    request: CreateSubmissionRequest,
-    credentials: HTTPAuthorizationCredentials = Security(security),
+    user=Security(get_current_user_dep),
+    request: CreateSubmissionRequest = None,
 ) -> CreateSubmissionResponse:
     """
     PUBLIC_INTERFACE
     Create a submission from a draft.
+
+    Important: Authentication must be evaluated before request body validation so that
+    missing/invalid Authorization headers return HTTP 401 (not 422).
     """
+    # `user` is resolved via dependency first; if auth is missing/invalid it will raise 401 here.
     db = get_connection()
-    auth_service = AuthService(db)
 
     try:
-        user = auth_service.get_current_user(credentials)
+        # Defensive: FastAPI should always provide request, but keep a clear error.
+        if request is None:
+            raise HTTPException(status_code=400, detail=make_error_response("INVALID_REQUEST", "Missing request body", generate_id("req")))
 
         if request.audit_context.actor_user_id != user["user_id"]:
             raise HTTPException(

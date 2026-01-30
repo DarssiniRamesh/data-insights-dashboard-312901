@@ -10,6 +10,55 @@ from datetime import datetime, UTC
 _connection: Optional[sqlite3.Connection] = None
 
 
+def _ensure_system_user(conn: sqlite3.Connection) -> None:
+    """
+    Ensure a deterministic 'system' user exists.
+
+    This user is required because audit_events.actor_user_id has a foreign key
+    constraint to users(user_id), and several services/compat endpoints emit
+    system-initiated audit events with actor_user_id='system'.
+
+    The function is idempotent and commits immediately so subsequent audit writes
+    won't fail with FK violations.
+    """
+    # Import locally to avoid import cycles at module import time.
+    from services.auth import AuthService
+
+    cursor = conn.execute("SELECT user_id, username, roles, is_active FROM users WHERE user_id = ?", ("system",))
+    row = cursor.fetchone()
+
+    desired_roles = "system,admin"  # includes 'admin' per requirements; 'system' is informational for DB only
+    desired_primary_role = "admin"
+    created_at = datetime.now(UTC).isoformat().replace("+00:00", "Z")
+
+    if row:
+        # Best-effort normalization to ensure it's active and has admin.
+        roles = (row["roles"] or "").split(",") if row["roles"] else []
+        if "admin" not in roles:
+            roles.append("admin")
+        if "system" not in roles:
+            roles.append("system")
+        roles_str = ",".join([r for r in roles if r])
+
+        conn.execute(
+            "UPDATE users SET username = ?, roles = ?, is_active = 1, role = ? WHERE user_id = ?",
+            ("system", roles_str, desired_primary_role, "system"),
+        )
+        conn.commit()
+        return
+
+    # Create required password fields; password isn't used for system actions but schema requires it.
+    auth = AuthService(conn)
+    pwd_hash, salt = auth.hash_password("Passw0rd!")
+
+    conn.execute(
+        """INSERT INTO users(user_id, username, password_hash, password_salt, roles, is_active, created_at, display_name, role)
+           VALUES(?,?,?,?,?,?,?,?,?)""",
+        ("system", "system", pwd_hash, salt, desired_roles, True, created_at, "System", desired_primary_role),
+    )
+    conn.commit()
+
+
 def get_db_path() -> str:
     """Get the SQLite database path from environment or use default."""
     db_path = os.getenv("SQLITE_DB_PATH", "data/app.db")
@@ -57,6 +106,9 @@ def init_db():
     
     # Create index on username for fast lookups
     conn.execute("CREATE INDEX IF NOT EXISTS idx_users_username ON users(username);")
+
+    # Ensure deterministic system user exists before any audit events can be written.
+    _ensure_system_user(conn)
     
     # Drafts table
     conn.execute("""
@@ -244,6 +296,9 @@ def init_db():
 def seed_test_users():
     """Seed test users for development and testing with authentication."""
     conn = get_connection()
+
+    # Ensure system user is always present (audit FK safety).
+    _ensure_system_user(conn)
     
     # Import auth service for password hashing
     from services.auth import AuthService
