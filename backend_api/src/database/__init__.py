@@ -1,4 +1,4 @@
-""""
+"""
 Database module for SQLite connection and initialization.
 """
 import sqlite3
@@ -39,15 +39,23 @@ def init_db():
     """Initialize database schema."""
     conn = get_connection()
     
-    # Users table
+    # Users table with authentication fields
     conn.execute("""
     CREATE TABLE IF NOT EXISTS users (
         user_id TEXT PRIMARY KEY,
+        username TEXT UNIQUE NOT NULL,
+        password_hash TEXT NOT NULL,
+        password_salt TEXT NOT NULL,
+        roles TEXT NOT NULL,
+        is_active INTEGER NOT NULL DEFAULT 1,
+        created_at TEXT NOT NULL,
         display_name TEXT,
-        role TEXT NOT NULL CHECK (role IN ('publisher', 'steward', 'governance_admin', 'auditor', 'system')),
-        created_at_utc TEXT NOT NULL
+        role TEXT
     );
     """)
+    
+    # Create index on username for fast lookups
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_users_username ON users(username);")
     
     # Drafts table
     conn.execute("""
@@ -233,23 +241,48 @@ def init_db():
 
 
 def seed_test_users():
-    """Seed test users for development and testing."""
+    """Seed test users for development and testing with authentication."""
     conn = get_connection()
     from datetime import datetime
     
+    # Import auth service for password hashing
+    from src.services.auth import AuthService
+    auth_service = AuthService(conn)
+    
+    # Seed users with default password "Passw0rd!"
     test_users = [
-        ("u-pub-1", "Publisher User", "publisher", datetime.utcnow().isoformat()),
-        ("u-stew-1", "Steward User", "steward", datetime.utcnow().isoformat()),
-        ("u-gov-1", "Governance Admin", "governance_admin", datetime.utcnow().isoformat()),
-        ("u-aud-1", "Auditor User", "auditor", datetime.utcnow().isoformat()),
-        ("system", "System", "system", datetime.utcnow().isoformat()),
+        ("submitter1", "Passw0rd!", ["submitter"], "Submitter User"),
+        ("reviewer1", "Passw0rd!", ["reviewer"], "Reviewer User"),
+        ("approver1", "Passw0rd!", ["approver"], "Approver User"),
+        ("auditor1", "Passw0rd!", ["auditor"], "Auditor User"),
+        ("admin1", "Passw0rd!", ["admin"], "Admin User"),
+        ("multi_role", "Passw0rd!", ["submitter", "reviewer"], "Multi-Role User"),
     ]
     
-    for user_id, display_name, role, created_at in test_users:
+    for username, password, roles, display_name in test_users:
         try:
+            # Check if user exists
+            cursor = conn.execute("SELECT user_id FROM users WHERE username = ?", (username,))
+            if cursor.fetchone():
+                continue
+            
+            # Hash password
+            pwd_hash, salt = auth_service.hash_password(password)
+            
+            # Generate user ID
+            import uuid
+            user_id = f"u-{str(uuid.uuid4())[:8]}"
+            created_at = datetime.utcnow().isoformat() + "Z"
+            roles_str = ','.join(roles)
+            
+            # For backward compatibility, set role to first role
+            primary_role = roles[0] if roles else "submitter"
+            
+            # Insert user
             conn.execute(
-                "INSERT OR IGNORE INTO users(user_id, display_name, role, created_at_utc) VALUES(?,?,?,?)",
-                (user_id, display_name, role, created_at)
+                """INSERT INTO users(user_id, username, password_hash, password_salt, roles, is_active, created_at, display_name, role)
+                   VALUES(?,?,?,?,?,?,?,?,?)""",
+                (user_id, username, pwd_hash, salt, roles_str, True, created_at, display_name, primary_role)
             )
         except sqlite3.IntegrityError:
             pass

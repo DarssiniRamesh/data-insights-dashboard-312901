@@ -150,6 +150,7 @@ class ApproveSubmissionRequest(BaseModel):
     signature: Optional[SignatureBlock] = None
     audit_context: AuditContext
     rationale: Optional[str] = None
+    password: Optional[str] = Field(None, description="Password for electronic signature verification (required when using password reauthentication)")
 
 
 class ApproveSubmissionResponse(BaseModel):

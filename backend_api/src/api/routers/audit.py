@@ -9,7 +9,7 @@ from typing import Optional
 from src.database import get_connection
 from src.schemas import GetAuditEventsResponse, AuditEvent, ErrorResponse
 from src.services.audit import AuditService
-from src.services.auth import AuthService, security
+from src.services.auth import AuthService, security, require_roles
 from src.utils import make_error_response, generate_id
 
 router = APIRouter(
@@ -38,7 +38,7 @@ async def query_audit_events(
     entity_type: Optional[str] = Query(None, description="Filter by entity type"),
     entity_id: Optional[str] = Query(None, description="Filter by entity ID"),
     limit: int = Query(100, ge=1, le=1000, description="Maximum events to return"),
-    credentials: HTTPAuthorizationCredentials = Security(security)
+    current_user: dict = Security(require_roles(["auditor", "admin", "governance_admin"]))
 ) -> GetAuditEventsResponse:
     """
     PUBLIC_INTERFACE

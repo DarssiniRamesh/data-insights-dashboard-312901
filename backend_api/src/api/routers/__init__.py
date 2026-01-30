@@ -1,6 +1,6 @@
 """
 Routers module for data product publishing API.
 """
-from . import drafts, submissions, validation, audit, evidence
+from . import drafts, submissions, validation, audit, evidence, auth
 
-__all__ = ['drafts', 'submissions', 'validation', 'audit', 'evidence']
+__all__ = ['auth', 'drafts', 'submissions', 'validation', 'audit', 'evidence']

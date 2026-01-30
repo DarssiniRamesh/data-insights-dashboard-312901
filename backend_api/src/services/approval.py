@@ -73,8 +73,8 @@ class ApprovalService:
         "rejected": []
     }
     
-    # Allowed roles for approval actions
-    APPROVER_ROLES = ["steward", "governance_admin"]
+    # Allowed roles for approval actions (includes new RBAC roles and legacy roles)
+    APPROVER_ROLES = ["approver", "admin", "steward", "governance_admin"]
     
     # Signature timestamp window (minutes)
     SIGNATURE_WINDOW_MINUTES = 5
@@ -107,7 +107,7 @@ class ApprovalService:
         """
         # Verify user exists
         cursor = self.db.execute(
-            "SELECT user_id, role FROM users WHERE user_id = ?",
+            "SELECT user_id, roles FROM users WHERE user_id = ?",
             (user_id,)
         )
         user_row = cursor.fetchone()
@@ -165,9 +165,12 @@ class ApprovalService:
             AuthenticationError: If credentials invalid
             SignatureError: If signature validation fails
         """
-        # Verify user credentials
+        # Verify user credentials with password
+        from src.services.auth import AuthService
+        auth_service = AuthService(self.db)
+        
         cursor = self.db.execute(
-            "SELECT user_id, role FROM users WHERE user_id = ?",
+            "SELECT user_id, password_hash, password_salt, roles FROM users WHERE user_id = ?",
             (user_id,)
         )
         user_row = cursor.fetchone()
@@ -178,8 +181,13 @@ class ApprovalService:
                 {"user_id": user_id}
             )
         
-        # In production, this would validate password hash
-        # For this implementation, we validate user exists and signature metadata
+        # Verify password if provided
+        if password:
+            if not auth_service.verify_password(password, user_row["password_hash"], user_row["password_salt"]):
+                raise AuthenticationError(
+                    "Invalid password for electronic signature",
+                    {"user_id": user_id}
+                )
         
         # Validate signature block structure
         required_fields = ["signer_user_id", "signer_role", "signed_at_utc", 
@@ -249,7 +257,8 @@ class ApprovalService:
         signature: Dict[str, Any],
         correlation_id: str,
         required_preconditions: Optional[Dict[str, Any]] = None,
-        rationale: Optional[str] = None
+        rationale: Optional[str] = None,
+        password_for_esign: Optional[str] = None
     ) -> Dict[str, Any]:
         """
         PUBLIC_INTERFACE
@@ -264,6 +273,7 @@ class ApprovalService:
             correlation_id: Request correlation ID
             required_preconditions: Optional preconditions (e.g., validation_run_id)
             rationale: Optional rationale for decision
+            password_for_esign: Password for e-sign verification
             
         Returns:
             Dict with approval results
@@ -351,6 +361,36 @@ class ApprovalService:
                 "Electronic signature required for approval",
                 {"submission_id": submission_id}
             )
+        
+        # Verify password for e-sign if signature uses password method
+        if signature.get("reauthentication_method") == "password":
+            if not password_for_esign:
+                raise SignatureError(
+                    "Password re-entry required for electronic signature",
+                    {"reauthentication_method": "password"}
+                )
+            
+            # Verify password
+            from src.services.auth import AuthService
+            auth_service = AuthService(self.db)
+            
+            cursor = self.db.execute(
+                "SELECT password_hash, password_salt FROM users WHERE user_id = ?",
+                (approver_user_id,)
+            )
+            user_row = cursor.fetchone()
+            
+            if not user_row:
+                raise AuthenticationError(
+                    "Approver user not found",
+                    {"approver_user_id": approver_user_id}
+                )
+            
+            if not auth_service.verify_password(password_for_esign, user_row["password_hash"], user_row["password_salt"]):
+                raise SignatureError(
+                    "Invalid password for electronic signature",
+                    {}
+                )
         
         # Validate signature hash if provided
         if "signature_hash" in signature:
@@ -488,7 +528,6 @@ class ApprovalService:
                     )
                     val_row = cursor.fetchone()
                     if val_row:
-                        import json
                         import os
                         storage_ref = val_row["storage_ref"]
                         if os.path.exists(storage_ref):

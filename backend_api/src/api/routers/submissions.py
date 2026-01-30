@@ -390,7 +390,8 @@ async def approve_submission(
             signature=request.signature.dict() if request.signature else None,
             correlation_id=request.audit_context.client_request_id,
             required_preconditions=request.required_preconditions.dict() if request.required_preconditions else None,
-            rationale=request.rationale
+            rationale=request.rationale,
+            password_for_esign=request.password
         )
         
         return ApproveSubmissionResponse(

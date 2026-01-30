@@ -20,11 +20,15 @@ For WebSocket usage examples, see the /docs/websocket-usage endpoint.
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from src.api.routers import drafts, submissions, validation, audit, evidence
+from src.api.routers import drafts, submissions, validation, audit, evidence, auth
 from src.database import init_db, seed_test_users
 
 # OpenAPI metadata
 openapi_tags = [
+    {
+        "name": "auth",
+        "description": "Authentication and authorization endpoints. Provides login, registration, role assignment, and user profile retrieval."
+    },
     {
         "name": "drafts",
         "description": "Draft data product package management. Allows publishers to create and manage draft packages before submission."
@@ -66,6 +70,7 @@ app.add_middleware(
 )
 
 # Register routers
+app.include_router(auth.router)
 app.include_router(drafts.router)
 app.include_router(submissions.router)
 app.include_router(validation.router)
