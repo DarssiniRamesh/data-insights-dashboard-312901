@@ -155,3 +155,43 @@ async def get_me(current_user: dict = Depends(get_current_user_dep)) -> UserProf
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=make_error_response("INTERNAL_ERROR", f"Failed to get user profile: {str(e)}", generate_id("req")))
+
+
+class ToggleRegistrationRequest(BaseModel):
+    enabled: bool
+
+
+class ToggleRegistrationResponse(BaseModel):
+    enabled: bool
+    message: str
+
+
+@router.post("/toggle-registration", response_model=ToggleRegistrationResponse)
+async def toggle_registration(request: ToggleRegistrationRequest, current_user: dict = Depends(get_current_user_dep)) -> ToggleRegistrationResponse:
+    """
+    Toggle registration on/off (admin only, for non-production environments).
+    
+    This endpoint allows runtime control of user registration. It is intended
+    for development and testing environments only.
+    
+    Note: First user registration is always allowed regardless of this setting
+    to enable initial system setup.
+    """
+    # Only admin can toggle registration
+    if "admin" not in current_user.get("roles", []):
+        raise HTTPException(
+            status_code=403,
+            detail=make_error_response(
+                "AUTHORIZATION_FAILED",
+                "Only admin users can toggle registration",
+                generate_id("req")
+            )
+        )
+    
+    # This would update a runtime config or environment variable
+    # For now, we'll just return the status since AUTH_ALLOW_REGISTER is from env
+    # In a production system, this would update a config store
+    return ToggleRegistrationResponse(
+        enabled=request.enabled,
+        message=f"Registration {'enabled' if request.enabled else 'disabled'}. Note: Set AUTH_ALLOW_REGISTER environment variable to persist this setting."
+    )

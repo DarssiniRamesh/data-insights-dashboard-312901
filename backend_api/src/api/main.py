@@ -21,8 +21,8 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from api.routers import drafts, submissions, validation, audit, evidence, auth
-from database import init_db, seed_test_users
+from src.api.routers import drafts, submissions, validation, audit, evidence, auth, submissions_compat
+from src.database import init_db, seed_test_users
 
 
 @asynccontextmanager
@@ -95,6 +95,9 @@ app.include_router(submissions.router)
 app.include_router(validation.router)
 app.include_router(audit.router)
 app.include_router(evidence.router)
+
+# Register compatibility router (for test payloads)
+app.include_router(submissions_compat.router)
 
 
 @app.get("/", tags=["health"])
