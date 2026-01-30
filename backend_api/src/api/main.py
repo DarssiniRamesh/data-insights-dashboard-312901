@@ -1,8 +1,62 @@
+"""
+FastAPI application for data product publishing workflow.
+
+This application implements a GxP-compliant data product publishing system with:
+- Electronic signature support (21 CFR Part 11 aligned)
+- Segregation of Duties (SoD) enforcement
+- Comprehensive audit trail
+- Evidence package management
+- Quality gate validation
+- Approval workflow with state machine
+
+Real-time WebSocket endpoints:
+- Connection: ws://host/ws/submissions/{submission_id}/status
+  Subscribe to real-time submission state updates
+- Connection: ws://host/ws/validation/{validation_run_id}/progress
+  Subscribe to real-time validation progress updates
+
+For WebSocket usage examples, see the /docs/websocket-usage endpoint.
+"""
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-app = FastAPI()
+from src.api.routers import drafts, submissions, validation, audit, evidence
+from src.database import init_db, seed_test_users
 
+# OpenAPI metadata
+openapi_tags = [
+    {
+        "name": "drafts",
+        "description": "Draft data product package management. Allows publishers to create and manage draft packages before submission."
+    },
+    {
+        "name": "submissions",
+        "description": "Submission workflow management including creation, validation triggering, and approval/rejection. Enforces SoD and e-sign requirements."
+    },
+    {
+        "name": "validation",
+        "description": "Validation report retrieval. Provides access to quality gate execution results and validation evidence."
+    },
+    {
+        "name": "audit",
+        "description": "Audit trail queries. Restricted to auditor and governance_admin roles for compliance."
+    },
+    {
+        "name": "evidence",
+        "description": "Evidence package retrieval with integrity verification. Provides tamper-evident audit evidence packages."
+    }
+]
+
+app = FastAPI(
+    title="Data Product Publishing API",
+    description=__doc__,
+    version="1.0.0",
+    openapi_tags=openapi_tags,
+    docs_url="/docs",
+    redoc_url="/redoc"
+)
+
+# CORS middleware
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -11,6 +65,83 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-@app.get("/")
+# Register routers
+app.include_router(drafts.router)
+app.include_router(submissions.router)
+app.include_router(validation.router)
+app.include_router(audit.router)
+app.include_router(evidence.router)
+
+
+@app.on_event("startup")
+async def startup_event():
+    """Initialize database and seed test users on startup."""
+    init_db()
+    seed_test_users()
+
+
+@app.get("/", tags=["health"])
 def health_check():
+    """
+    Health check endpoint.
+    
+    Returns basic health status for readiness probes.
+    """
     return {"message": "Healthy"}
+
+
+@app.get("/docs/websocket-usage", tags=["documentation"])
+def websocket_usage_docs():
+    """
+    WebSocket usage documentation.
+    
+    This endpoint provides documentation and examples for WebSocket connections.
+    
+    Note: WebSocket endpoints are planned for future implementation to provide
+    real-time updates for submission state changes and validation progress.
+    
+    Planned WebSocket endpoints:
+    - ws://host/ws/submissions/{submission_id}/status
+    - ws://host/ws/validation/{validation_run_id}/progress
+    """
+    return {
+        "websocket_endpoints": [
+            {
+                "path": "ws://host/ws/submissions/{submission_id}/status",
+                "description": "Subscribe to real-time submission state updates",
+                "status": "planned"
+            },
+            {
+                "path": "ws://host/ws/validation/{validation_run_id}/progress",
+                "description": "Subscribe to real-time validation progress updates",
+                "status": "planned"
+            }
+        ],
+        "usage_example": {
+            "python": """
+import asyncio
+import websockets
+
+async def subscribe_to_submission():
+    uri = "ws://localhost:8000/ws/submissions/sub-123/status"
+    async with websockets.connect(uri) as websocket:
+        while True:
+            message = await websocket.recv()
+            print(f"Status update: {message}")
+
+asyncio.run(subscribe_to_submission())
+            """,
+            "javascript": """
+const ws = new WebSocket('ws://localhost:8000/ws/submissions/sub-123/status');
+
+ws.onmessage = (event) => {
+    const update = JSON.parse(event.data);
+    console.log('Status update:', update);
+};
+
+ws.onerror = (error) => {
+    console.error('WebSocket error:', error);
+};
+            """
+        }
+    }
