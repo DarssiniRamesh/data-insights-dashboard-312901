@@ -87,12 +87,17 @@ async def async_client(app) -> AsyncIterator[AsyncClient]:
     running an external uvicorn server.
 
     IMPORTANT:
-      - Enable ASGI lifespan so FastAPI startup/shutdown events run.
-        This ensures init_db()/seed_test_users() execute during tests.
+      - The installed httpx ASGITransport does not support `lifespan=...`.
+      - We still must run FastAPI startup/shutdown so init_db()/seed_test_users()
+        execute (DB schema + deterministic 'system' user seeding for audit FK).
     """
-    transport = ASGITransport(app=app, lifespan="on")
-    async with AsyncClient(transport=transport, base_url="http://testserver") as client:
-        yield client
+    await app.router.startup()
+    try:
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://testserver") as client:
+            yield client
+    finally:
+        await app.router.shutdown()
 
 
 @pytest.fixture()
