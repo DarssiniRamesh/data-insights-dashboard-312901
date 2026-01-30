@@ -1,7 +1,7 @@
 import json
 import os
 
-from src.api.main import app
+from api.main import app
 
 # Get the OpenAPI schema
 openapi_schema = app.openapi()

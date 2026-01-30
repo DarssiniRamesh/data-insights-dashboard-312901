@@ -4,7 +4,7 @@ Audit service for recording audit events with transactional coupling.
 """
 import json
 from typing import Dict, Any, Optional
-from src.utils import generate_id, utc_now_iso
+from utils import generate_id, utc_now_iso
 
 
 class AuditService:

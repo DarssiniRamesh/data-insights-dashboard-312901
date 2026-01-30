@@ -4,7 +4,7 @@ Utility functions for the backend API.
 import uuid
 import json
 import hashlib
-from datetime import datetime, timezone
+from datetime import datetime, UTC
 from typing import Any, Dict
 
 
@@ -15,24 +15,24 @@ def generate_id(prefix: str = "") -> str:
 
 
 def utc_now_iso() -> str:
-    """Get current UTC timestamp in ISO-8601 format with timezone awareness."""
-    return datetime.now(timezone.utc).replace(tzinfo=None).isoformat() + "Z"
+    """Get current UTC timestamp in ISO-8601 format with trailing 'Z'."""
+    return datetime.now(UTC).isoformat().replace("+00:00", "Z")
 
 
 def canonical_json(data: Any) -> str:
     """Serialize data to canonical JSON (sorted keys, no whitespace)."""
-    return json.dumps(data, sort_keys=True, separators=(',', ':'))
+    return json.dumps(data, sort_keys=True, separators=(",", ":"))
 
 
 def compute_hash(data: Any) -> str:
     """Compute SHA-256 hash of data."""
     if isinstance(data, str):
-        content = data.encode('utf-8')
-    elif isinstance(data, dict) or isinstance(data, list):
-        content = canonical_json(data).encode('utf-8')
+        content = data.encode("utf-8")
+    elif isinstance(data, (dict, list)):
+        content = canonical_json(data).encode("utf-8")
     else:
-        content = str(data).encode('utf-8')
-    
+        content = str(data).encode("utf-8")
+
     return hashlib.sha256(content).hexdigest()
 
 
@@ -44,6 +44,6 @@ def make_error_response(code: str, message: str, correlation_id: str, details: D
             "message": message,
             "details": details or {},
             "correlation_id": correlation_id,
-            "timestamp_utc": utc_now_iso()
+            "timestamp_utc": utc_now_iso(),
         }
     }

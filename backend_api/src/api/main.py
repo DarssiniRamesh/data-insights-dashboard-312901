@@ -21,8 +21,8 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from src.api.routers import drafts, submissions, validation, audit, evidence, auth, submissions_compat
-from src.database import init_db, seed_test_users
+from api.routers import drafts, submissions, validation, audit, evidence, auth, submissions_compat
+from database import init_db, seed_test_users
 
 
 @asynccontextmanager
