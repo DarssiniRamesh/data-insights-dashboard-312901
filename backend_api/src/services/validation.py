@@ -1,6 +1,12 @@
 """
 PUBLIC_INTERFACE
 Validation service for running quality gates and generating validation reports.
+
+Implements:
+- FR-VAL-001: Automated quality gate validation
+- FR-VAL-002: Tamper-evident validation report generation
+- FR-VAL-003: Validation failure blocking (via status propagation)
+- FR-EVD-002: Cryptographic hashing of validation reports
 """
 import json
 import os

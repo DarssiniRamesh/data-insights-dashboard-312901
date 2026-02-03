@@ -1,6 +1,15 @@
 """
 PUBLIC_INTERFACE
 Submissions router for data product submission and approval workflow.
+
+Implements:
+- FR-DPP-001: Dataset submission endpoint
+- FR-DPP-003: Identity capture for submissions
+- FR-VAL-001: Validation triggering endpoint
+- FR-APR-001: Approval/rejection with electronic signature
+- FR-APR-002: SoD enforcement in approval workflow
+- FR-AUTH-001: Authentication requirement for all endpoints
+- FR-AUTH-002: Role-based access control
 """
 from fastapi import APIRouter, HTTPException, Security, Body
 from fastapi.security import HTTPAuthorizationCredentials

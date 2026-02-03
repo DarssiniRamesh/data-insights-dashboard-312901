@@ -1,6 +1,12 @@
 """
 PUBLIC_INTERFACE
 Audit service for recording audit events with transactional coupling.
+
+Implements:
+- FR-AUD-001: Comprehensive audit logging with actor, timestamp, and result
+- FR-AUD-002: Audit trail immutability (append-only design)
+- FR-AUD-003: Audit query access control (enforced at router level)
+- FR-DPP-003: Identity capture for all actions
 """
 import json
 from typing import Dict, Any, Optional

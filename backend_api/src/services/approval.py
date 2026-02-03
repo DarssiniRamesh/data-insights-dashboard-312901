@@ -1,6 +1,15 @@
 """
 PUBLIC_INTERFACE
 Approval service for managing submission approvals with SoD and e-sign validation.
+
+Implements:
+- FR-APR-001: Electronic signature requirement and validation
+- FR-APR-002: Segregation of Duties (SoD) enforcement
+- FR-APR-003: Signature identity binding validation
+- FR-APR-004: Signature timestamp validation within allowed window
+- FR-APR-005: Password reauthentication for electronic signatures
+- FR-VAL-003: Validation failure blocking in approval workflow
+- FR-EVD-001: Evidence package creation on approval
 """
 import json
 import os

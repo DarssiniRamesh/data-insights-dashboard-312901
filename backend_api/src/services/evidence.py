@@ -1,6 +1,12 @@
 """
 PUBLIC_INTERFACE
 Evidence package service for managing audit-linked JSON evidence with hashing.
+
+Implements:
+- FR-EVD-001: Tamper-evident evidence package creation
+- FR-EVD-002: Cryptographic hashing (SHA-256) of all evidence artifacts
+- FR-EVD-003: Evidence integrity verification on retrieval
+- FR-EVD-004: Evidence-approval linkage via audit trail
 """
 import json
 import os

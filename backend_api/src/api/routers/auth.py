@@ -1,6 +1,11 @@
 """
 PUBLIC_INTERFACE
 Authentication and authorization router.
+
+Implements:
+- FR-AUTH-001: User authentication (login endpoint)
+- FR-AUTH-002: Role assignment and management
+- FR-AUTH-003: User registration with admin controls
 """
 import os
 from fastapi import APIRouter, HTTPException, Depends

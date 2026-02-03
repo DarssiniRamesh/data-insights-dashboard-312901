@@ -1,6 +1,14 @@
 """
 PUBLIC_INTERFACE
 Authentication and authorization service with local token-based auth and RBAC.
+
+Implements:
+- FR-AUTH-001: User authentication via secure token-based mechanism
+- FR-AUTH-002: Role-based access control (RBAC)
+- FR-AUTH-003: User registration management
+- FR-APR-002: Segregation of Duties (SoD) enforcement
+- NFR-SEC-001: Secure token management with HMAC-SHA256
+- NFR-SEC-002: Password hashing with PBKDF2-HMAC-SHA256
 """
 import hashlib
 import hmac
