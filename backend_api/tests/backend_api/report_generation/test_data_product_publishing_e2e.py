@@ -11,6 +11,8 @@ def _todo(reason: str) -> str:
 @pytest.mark.xfail(reason=_todo("FRD-DPP-001 submission -> publish happy path endpoints/services missing"))
 def test_e2e_happy_path_submission_to_publish(temp_sqlite_path, seed_submission_payload):
     """
+    Feature: report_generation
+
     FRD-DPP-001: End-to-end flow: submission → pipeline processing → quality gates →
     validation → approval → publish.
 
@@ -30,6 +32,8 @@ def test_e2e_happy_path_submission_to_publish(temp_sqlite_path, seed_submission_
 @pytest.mark.xfail(reason=_todo("FRD-DPP-002 invalid payload schema not implemented"))
 def test_submission_rejects_invalid_payload():
     """
+    Feature: dataset_upload / report_generation (input validation)
+
     FRD-DPP-002: Invalid payloads must be rejected with clear validation errors.
 
     Negative cases:
@@ -45,6 +49,8 @@ def test_submission_rejects_invalid_payload():
 @pytest.mark.xfail(reason=_todo("FRD-DPP-003 duplicate submission/version conflict behavior not implemented"))
 def test_duplicate_submission_version_conflict(seed_submission_payload):
     """
+    Feature: dashboard_management (conflict handling surfaced in UI)
+
     FRD-DPP-003: Duplicate submissions and version conflicts are rejected.
 
     Intended setup:
@@ -59,6 +65,8 @@ def test_duplicate_submission_version_conflict(seed_submission_payload):
 @pytest.mark.xfail(reason=_todo("FRD-DPP-004 quality gates failure handling not implemented"))
 def test_quality_gate_failure_blocks_approval_and_publish():
     """
+    Feature: report_generation
+
     FRD-DPP-004: Failed quality gates prevent approval/publish and produce evidence.
 
     Intended assertions:
@@ -74,6 +82,8 @@ def test_quality_gate_failure_blocks_approval_and_publish():
 @pytest.mark.xfail(reason=_todo("FRD-DPP-005 missing signatures/evidence enforcement not implemented"))
 def test_missing_signatures_or_evidence_blocks_approval():
     """
+    Feature: report_generation / dashboard_management
+
     FRD-DPP-005: Missing required signatures/evidence blocks approval.
 
     Intended assertions:
@@ -88,6 +98,8 @@ def test_missing_signatures_or_evidence_blocks_approval():
 @pytest.mark.xfail(reason=_todo("FRD-DPP-006 segregation-of-duties enforcement not implemented"))
 def test_sod_violation_submitter_cannot_approve(auth_context_submitter):
     """
+    Feature: dashboard_management (governance controls)
+
     FRD-DPP-006: Segregation-of-duties (SoD): submitter cannot approve own submission.
 
     Intended assertions:
@@ -102,6 +114,8 @@ def test_sod_violation_submitter_cannot_approve(auth_context_submitter):
 @pytest.mark.xfail(reason=_todo("FRD-DPP-007 publish error handling not implemented"))
 def test_publish_error_results_in_retryable_state():
     """
+    Feature: report_generation / dashboard_management
+
     FRD-DPP-007: Publish errors should be captured and state set appropriately.
 
     Intended assertions:

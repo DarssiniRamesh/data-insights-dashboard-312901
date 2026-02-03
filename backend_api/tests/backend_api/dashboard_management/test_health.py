@@ -5,6 +5,8 @@ import pytest
 @pytest.mark.anyio
 async def test_health_check_root_returns_healthy(async_client):
     """
+    Feature: dashboard_management (system status)
+
     FRD-BASE-HEALTH: Service exposes a basic health endpoint for readiness checks.
     NFR-OBS-HEALTH: Health endpoint must be fast and return a deterministic payload.
     """
@@ -17,6 +19,8 @@ async def test_health_check_root_returns_healthy(async_client):
 @pytest.mark.anyio
 async def test_health_check_root_disallows_post(async_client):
     """
+    Feature: dashboard_management (system status)
+
     NFR-SEC-HTTP: Endpoint should not accept unsupported methods.
     """
     resp = await async_client.post("/")

@@ -19,6 +19,8 @@ def _authn_todo(reason: str) -> str:
 @pytest.mark.anyio
 async def test_api_create_submission_returns_201(async_client, seed_submission_payload):
     """
+    Feature: dashboard_management (workflow entrypoint surfaced in dashboard)
+
     FR-DPP-001 (Submission):
       The system shall allow a Publisher to submit a dataset for publishing via UI or API.
 
@@ -39,6 +41,8 @@ async def test_api_create_submission_returns_201(async_client, seed_submission_p
 @pytest.mark.anyio
 async def test_api_run_quality_gates_blocks_on_failure(async_client):
     """
+    Feature: report_generation (quality gate/validation reporting surfaced in dashboard)
+
     FR-DPP-004 (Mandatory gates) / FR-DPP-008 (Block on failure).
 
     Traceability:
@@ -57,6 +61,8 @@ async def test_api_run_quality_gates_blocks_on_failure(async_client):
 @pytest.mark.anyio
 async def test_api_approval_rejects_sod_violation(async_client):
     """
+    Feature: dashboard_management (governance controls)
+
     Legacy placeholder test (kept): SoD: submitter cannot approve own submission.
 
     See also: dedicated negative SoD test cases added below with richer traceability.
@@ -70,6 +76,8 @@ async def test_api_approval_rejects_sod_violation(async_client):
 @pytest.mark.anyio
 async def test_api_publish_returns_published_location(async_client):
     """
+    Feature: dashboard_management / report_generation (publish status and published location)
+
     FR-DPP-025/FR-DPP-026/FR-DPP-027 style publish outputs will be validated here once implemented.
     """
     resp = await async_client.post("/submissions/s1/publish")
@@ -88,6 +96,8 @@ async def test_api_publish_returns_published_location(async_client):
 @pytest.mark.anyio
 async def test_auth_missing_token_rejected_401(async_client, seed_submission_payload):
     """
+    Feature: dashboard_management (security)
+
     Authentication failure: missing token/header.
 
     Traceability:
@@ -104,6 +114,8 @@ async def test_auth_missing_token_rejected_401(async_client, seed_submission_pay
 @pytest.mark.anyio
 async def test_auth_invalid_or_expired_token_rejected_401(async_client):
     """
+    Feature: dashboard_management (security)
+
     Authentication failure: invalid/expired token.
 
     Traceability:
@@ -122,6 +134,8 @@ async def test_auth_invalid_or_expired_token_rejected_401(async_client):
 @pytest.mark.anyio
 async def test_auth_wrong_audience_or_scope_rejected_403(async_client):
     """
+    Feature: dashboard_management (security)
+
     Authentication/authorization failure: wrong audience/scope.
 
     Traceability:
@@ -139,6 +153,8 @@ async def test_auth_wrong_audience_or_scope_rejected_403(async_client):
 @pytest.mark.anyio
 async def test_authz_publisher_cannot_access_audit_events_403(async_client):
     """
+    Feature: dashboard_management (audit UI access control)
+
     Authorization failure: role-based access control violation.
 
     Traceability:
@@ -164,6 +180,8 @@ async def test_authz_publisher_cannot_access_audit_events_403(async_client):
 @pytest.mark.xfail(reason=_todo("SoD enforcement + identity binding not implemented on approve endpoint"))
 async def test_sod_same_user_cannot_submit_and_approve_same_submission(async_client):
     """
+    Feature: dashboard_management (governance controls)
+
     Segregation of Duties (SoD): submitter cannot approve their own submission.
 
     Traceability:
@@ -203,6 +221,8 @@ async def test_sod_same_user_cannot_submit_and_approve_same_submission(async_cli
 @pytest.mark.xfail(reason=_authz_todo("Cross-role impersonation prevention not implemented"))
 async def test_sod_cross_role_impersonation_attempt_blocked(async_client):
     """
+    Feature: dashboard_management (security / SoD)
+
     SoD/authorization: attempt to impersonate a higher-privilege role via request body.
 
     Example: audit_context.actor_role='steward' but token/user is publisher.
@@ -247,6 +267,8 @@ async def test_sod_cross_role_impersonation_attempt_blocked(async_client):
 @pytest.mark.xfail(reason=_todo("Approval endpoint + signature validation not implemented"))
 async def test_esign_missing_signature_block_rejected(async_client):
     """
+    Feature: dashboard_management (governance controls)
+
     Electronic signature: missing signature block.
 
     Traceability:
@@ -275,6 +297,8 @@ async def test_esign_missing_signature_block_rejected(async_client):
 @pytest.mark.xfail(reason=_todo("Signature hash verification not implemented"))
 async def test_esign_invalid_signature_hash_rejected(async_client):
     """
+    Feature: dashboard_management (governance controls)
+
     Electronic signature: invalid signature_hash (integrity check).
 
     Traceability:
@@ -308,6 +332,8 @@ async def test_esign_invalid_signature_hash_rejected(async_client):
 @pytest.mark.xfail(reason=_todo("Signature signer identity binding not implemented"))
 async def test_esign_mismatched_signer_id_rejected(async_client):
     """
+    Feature: dashboard_management (governance controls)
+
     Electronic signature: signer_user_id does not match authenticated actor.
 
     Traceability:
@@ -345,6 +371,8 @@ async def test_esign_mismatched_signer_id_rejected(async_client):
 @pytest.mark.xfail(reason=_todo("Signature timestamp window policy not implemented"))
 async def test_esign_timestamp_outside_allowed_window_rejected(async_client):
     """
+    Feature: dashboard_management (governance controls)
+
     Electronic signature: signature timestamp outside allowed window.
 
     Traceability:
@@ -378,6 +406,8 @@ async def test_esign_timestamp_outside_allowed_window_rejected(async_client):
 @pytest.mark.xfail(reason=_todo("Re-sign without changes/idempotency policy not implemented"))
 async def test_esign_resign_without_changes_rejected_or_idempotent(async_client):
     """
+    Feature: dashboard_management (governance controls)
+
     Electronic signature: re-sign attempts without changes.
 
     Traceability:
@@ -420,6 +450,8 @@ async def test_esign_resign_without_changes_rejected_or_idempotent(async_client)
 @pytest.mark.xfail(reason=_todo("Workflow state machine + gate enforcement not implemented"))
 async def test_quality_gate_failed_blocks_workflow_progression(async_client):
     """
+    Feature: report_generation (enforcement surfaced in reporting UI)
+
     Quality gate enforcement: cannot approve/publish when gates failed or evidence missing.
 
     Traceability:
@@ -437,6 +469,8 @@ async def test_quality_gate_failed_blocks_workflow_progression(async_client):
 @pytest.mark.xfail(reason=_todo("Evidence checksum validation endpoint not implemented"))
 async def test_audit_or_evidence_checksum_tampering_detected(async_client):
     """
+    Feature: dashboard_management (integrity monitoring)
+
     Audit/evidence integrity: tampered evidence checksum should be detected and blocked.
 
     Traceability:

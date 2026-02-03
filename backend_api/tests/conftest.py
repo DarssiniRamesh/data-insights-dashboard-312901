@@ -88,9 +88,16 @@ async def async_client(app) -> AsyncIterator[AsyncClient]:
 
     IMPORTANT:
       - The installed httpx ASGITransport does not support `lifespan=...`.
-      - We still must run FastAPI startup/shutdown so init_db()/seed_test_users()
-        execute (DB schema + deterministic 'system' user seeding for audit FK).
+      - We still must run FastAPI startup/shutdown.
+      - Additionally, we *force* DB schema initialization here because the
+        FastAPI startup hook may not create tables in some environments
+        (or import ordering may bypass initialization).
     """
+    # Ensure DB schema exists before any endpoint touches the DB.
+    from database import init_db
+
+    init_db()
+
     await app.router.startup()
     try:
         transport = ASGITransport(app=app)

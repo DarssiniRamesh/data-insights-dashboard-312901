@@ -4,6 +4,8 @@ import pytest
 @pytest.mark.unit
 def test_openapi_schema_can_be_generated(app):
     """
+    Feature: dashboard_management (API documentation used by UI/tooling)
+
     NFR-DOC-OPENAPI: OpenAPI schema should be generatable for documentation/tooling.
     """
     schema = app.openapi()
