@@ -13,6 +13,15 @@ from utils import generate_id, utc_now_iso
 from services.audit import AuditService
 
 
+class EvidenceError(Exception):
+    """Base exception for evidence-related errors."""
+    def __init__(self, code: str, message: str, details: Optional[Dict[str, Any]] = None):
+        self.code = code
+        self.message = message
+        self.details = details or {}
+        super().__init__(message)
+
+
 class EvidenceService:
     """Service for evidence package management."""
 
