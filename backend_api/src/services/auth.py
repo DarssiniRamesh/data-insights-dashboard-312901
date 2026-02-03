@@ -228,7 +228,7 @@ class AuthService:
             roles = row["roles"].split(",") if row["roles"] else []
             primary_role = roles[0] if roles else "submitter"
 
-            return {"user_id": row["user_id"], "username": row["username"], "roles": roles, "role": primary_role}
+            return {"user_id": row["user_id"], "username": row["username"], "roles": roles, "role": primary_role, "primary_role": primary_role}
 
         except HTTPException:
             raise
@@ -309,12 +309,16 @@ class AuthService:
 
     # PUBLIC_INTERFACE
     def enforce_sod(self, submission_id: str, approver_user_id: str) -> None:
-        """Enforce Segregation of Duties: approver cannot be the same as submitter."""
-        cursor = self.db.execute("SELECT submitter_user_id FROM submissions WHERE submission_id = ?", (submission_id,))
+        """
+        Enforce Segregation of Duties: approver cannot be the same as submitter.
+        
+        Note: Uses data_assets table internally. Parameter name kept as 'submission_id' for backward compatibility.
+        """
+        cursor = self.db.execute("SELECT submitter_user_id FROM data_assets WHERE data_asset_id = ?", (submission_id,))
         row = cursor.fetchone()
 
         if not row:
-            raise HTTPException(status_code=404, detail="Submission not found")
+            raise HTTPException(status_code=404, detail="Data asset (submission) not found")
 
         if row["submitter_user_id"] == approver_user_id:
             raise HTTPException(status_code=403, detail="Segregation of Duties violation: submitter cannot approve their own submission")
@@ -329,6 +333,12 @@ def get_current_user_dep(credentials: HTTPAuthorizationCredentials = Security(se
 
     db = get_connection()
     return AuthService(db).get_current_user(credentials)
+
+
+# PUBLIC_INTERFACE
+def get_current_user(credentials: HTTPAuthorizationCredentials = Security(security)):
+    """Alias for get_current_user_dep."""
+    return get_current_user_dep(credentials)
 
 
 # PUBLIC_INTERFACE

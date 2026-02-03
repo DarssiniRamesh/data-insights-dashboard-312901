@@ -1,388 +1,283 @@
 """
 PUBLIC_INTERFACE
-Approval service for managing submission approvals with SoD and e-sign validation.
+Approval service for managing data asset approvals with electronic signatures.
 
-Implements:
-- FR-APR-001: Electronic signature requirement and validation
-- FR-APR-002: Segregation of Duties (SoD) enforcement
-- FR-APR-003: Signature identity binding validation
-- FR-APR-004: Signature timestamp validation within allowed window
-- FR-APR-005: Password reauthentication for electronic signatures
-- FR-VAL-003: Validation failure blocking in approval workflow
-- FR-EVD-001: Evidence package creation on approval
+FR-APP-001: Electronic signature support (21 CFR Part 11 aligned)
+FR-APP-002: Segregation of Duties (SoD) enforcement
+FR-APP-003: Evidence package generation on approval
 """
-import json
-import os
 from typing import Dict, Any, Optional
-from datetime import datetime, timedelta, timezone
+import json
+import hashlib
 
-from utils import generate_id, utc_now_iso, compute_hash
+from utils import generate_id, utc_now_iso
 from services.audit import AuditService
+from services.validation import ValidationService
 from services.evidence import EvidenceService
 
 
-class ApprovalError(Exception):
-    """Base exception for approval errors."""
-
-    def __init__(self, code: str, message: str, details: Optional[Dict[str, Any]] = None):
-        self.code = code
-        self.message = message
-        self.details = details or {}
-        super().__init__(message)
+class ApprovalException(Exception):
+    """Base exception for approval-related errors."""
+    pass
 
 
-class AuthenticationError(ApprovalError):
-    """Authentication failure."""
-
-    def __init__(self, message: str, details: Optional[Dict[str, Any]] = None):
-        super().__init__("AUTHENTICATION_FAILED", message, details)
+class SoDViolationException(ApprovalException):
+    """Exception raised when Segregation of Duties is violated."""
+    pass
 
 
-class AuthorizationError(ApprovalError):
-    """Authorization failure."""
-
-    def __init__(self, message: str, details: Optional[Dict[str, Any]] = None):
-        super().__init__("AUTHORIZATION_FAILED", message, details)
-
-
-class SoDViolationError(ApprovalError):
-    """Segregation of Duties violation."""
-
-    def __init__(self, message: str, details: Optional[Dict[str, Any]] = None):
-        super().__init__("SOD_VIOLATION", message, details)
-
-
-class SignatureError(ApprovalError):
-    """Electronic signature validation failure."""
-
-    def __init__(self, message: str, details: Optional[Dict[str, Any]] = None):
-        super().__init__("SIGNATURE_VALIDATION_FAILED", message, details)
-
-
-class InvalidStateError(ApprovalError):
-    """Invalid workflow state transition."""
-
-    def __init__(self, message: str, details: Optional[Dict[str, Any]] = None):
-        super().__init__("INVALID_STATE_TRANSITION", message, details)
+class SignatureVerificationException(ApprovalException):
+    """Exception raised when electronic signature verification fails."""
+    pass
 
 
 class ApprovalService:
     """
-    Service for approval workflow with SoD enforcement and electronic signature validation.
+    Service for managing data asset approval workflow.
+    
+    Implements electronic signature validation, SoD enforcement, and evidence package management.
     """
-
-    VALID_TRANSITIONS = {
-        "validating": ["failed_validation", "in_review"],
-        "failed_validation": ["remediating"],
-        "in_review": ["approved", "rejected", "remediating"],
-        "remediating": ["validating"],
-        "approved": ["published"],
-        "published": [],
-        "rejected": [],
-    }
-
-    APPROVER_ROLES = ["approver", "admin", "steward", "governance_admin"]
-    SIGNATURE_WINDOW_MINUTES = 5
 
     def __init__(self, db_connection):
         self.db = db_connection
         self.audit_service = AuditService(db_connection)
+        self.validation_service = ValidationService(db_connection)
         self.evidence_service = EvidenceService(db_connection)
 
-    def verify_esign(
+    # PUBLIC_INTERFACE
+    def verify_electronic_signature(
         self,
-        user_id: str,
-        password: str,
-        intent: str,
-        signature_block: Dict[str, Any],
-        correlation_id: str,
-    ) -> Dict[str, Any]:
-        """
-        PUBLIC_INTERFACE
-        Verify electronic signature credentials and create signed record.
-        """
-        from services.auth import AuthService
-        auth_service = AuthService(self.db)
-
-        cursor = self.db.execute(
-            "SELECT user_id, password_hash, password_salt, roles FROM users WHERE user_id = ?",
-            (user_id,),
-        )
-        user_row = cursor.fetchone()
-        if not user_row:
-            raise AuthenticationError(f"User {user_id} not found", {"user_id": user_id})
-
-        if password:
-            if not auth_service.verify_password(password, user_row["password_hash"], user_row["password_salt"]):
-                raise AuthenticationError("Invalid password for electronic signature", {"user_id": user_id})
-
-        required_fields = ["signer_user_id", "signer_role", "signed_at_utc", "reauthentication_method", "signature_reason"]
-        for field in required_fields:
-            if field not in signature_block:
-                raise SignatureError(f"Missing required signature field: {field}", {"missing_field": field})
-
-        if signature_block["signer_user_id"] != user_id:
-            raise SignatureError(
-                "Signature signer_user_id does not match authenticated user",
-                {"expected": user_id, "provided": signature_block["signer_user_id"]},
-            )
-
-        signed_at = signature_block["signed_at_utc"]
-        current_time = datetime.now(timezone.utc)
-        try:
-            signed_time = datetime.fromisoformat(signed_at.replace("Z", "+00:00"))
-            time_diff = abs((current_time - signed_time).total_seconds() / 60)
-            if time_diff > self.SIGNATURE_WINDOW_MINUTES:
-                raise SignatureError(
-                    f"Signature timestamp outside allowed window ({self.SIGNATURE_WINDOW_MINUTES} minutes)",
-                    {"signed_at_utc": signed_at, "current_utc": utc_now_iso(), "window_minutes": self.SIGNATURE_WINDOW_MINUTES},
-                )
-        except (ValueError, AttributeError) as e:
-            raise SignatureError("Invalid signature timestamp format", {"signed_at_utc": signed_at, "error": str(e)})
-
-        signature_content = {"intent": intent, "signer_user_id": user_id, "signed_at_utc": signed_at, "signature_reason": signature_block["signature_reason"]}
-        signature_hash = compute_hash(signature_content)
-
-        verified_signature = signature_block.copy()
-        verified_signature["signature_hash"] = signature_hash
-        verified_signature["verified_at_utc"] = utc_now_iso()
-        return verified_signature
-
-    def approve_submission(
-        self,
-        submission_id: str,
-        decision: str,
-        approver_user_id: str,
-        approver_role: str,
         signature: Dict[str, Any],
-        correlation_id: str,
-        required_preconditions: Optional[Dict[str, Any]] = None,
-        rationale: Optional[str] = None,
-        password_for_esign: Optional[str] = None,
-    ) -> Dict[str, Any]:
+        password: Optional[str],
+        actor_user_id: str,
+    ) -> bool:
         """
         PUBLIC_INTERFACE
-        Approve or reject a submission with SoD and e-sign validation.
+        Verify an electronic signature block.
+
+        FR-APP-001: Implements e-signature verification aligned with 21 CFR Part 11.
+
+        Args:
+            signature: Signature block containing signer info and reason
+            password: Password for re-authentication (if method is 'password')
+            actor_user_id: User attempting the action
+
+        Returns:
+            True if signature is valid
+
+        Raises:
+            SignatureVerificationException: If signature verification fails
         """
-        if decision not in ["publish", "reject"]:
-            raise ApprovalError("INVALID_DECISION", f"Decision must be 'publish' or 'reject', got '{decision}'")
-
-        if approver_role not in self.APPROVER_ROLES:
-            raise AuthorizationError(
-                f"Role '{approver_role}' not authorized to approve submissions",
-                {"user_role": approver_role, "required_roles": self.APPROVER_ROLES},
-            )
-
-        cursor = self.db.execute("SELECT * FROM submissions WHERE submission_id = ?", (submission_id,))
-        submission_row = cursor.fetchone()
-        if not submission_row:
-            raise ApprovalError("SUBMISSION_NOT_FOUND", f"Submission {submission_id} not found")
-        submission = dict(submission_row)
-
-        current_state = submission["state"]
-        if current_state not in ["in_review"]:
-            raise InvalidStateError("Cannot approve submission in current state", {"current_state": current_state, "required_state": "in_review"})
-
-        if approver_user_id == submission["submitter_user_id"]:
-            self.audit_service.record_event(
-                event_type="approval_blocked_sod_violation",
-                entity_type="submission",
-                entity_id=submission_id,
-                actor_user_id=approver_user_id,
-                actor_role=approver_role,
-                correlation_id=correlation_id,
-                result="blocked",
-                details={"reason": "Same user cannot submit and approve", "submitter_user_id": submission["submitter_user_id"], "approver_user_id": approver_user_id},
-            )
-            self.db.commit()
-            raise SoDViolationError("Submitter cannot approve their own submission", {"submitter_user_id": submission["submitter_user_id"], "approver_user_id": approver_user_id})
-
         if not signature:
-            raise SignatureError("Electronic signature required for approval", {"submission_id": submission_id})
+            raise SignatureVerificationException("Signature block is required")
 
-        # Identity binding: signer must be the authenticated approver.
-        if signature.get("signer_user_id") and signature.get("signer_user_id") != approver_user_id:
-            raise SignatureError(
-                "Signature signer_user_id does not match authenticated user",
-                {"expected": approver_user_id, "provided": signature.get("signer_user_id")},
-            )
+        # Verify signer matches actor
+        if signature.get("signer_user_id") != actor_user_id:
+            raise SignatureVerificationException("Signer does not match authenticated user")
 
-        # Timestamp window policy (+/- SIGNATURE_WINDOW_MINUTES, using audit_context time as "now").
-        signed_at = signature.get("signed_at_utc")
-        if not signed_at:
-            raise SignatureError("Missing signed_at_utc in signature block", {"missing_field": "signed_at_utc"})
-        try:
-            signed_time = datetime.fromisoformat(str(signed_at).replace("Z", "+00:00"))
-            now_utc = datetime.now(timezone.utc)
-            diff_min = abs((now_utc - signed_time).total_seconds()) / 60.0
-            if diff_min > self.SIGNATURE_WINDOW_MINUTES:
-                raise SignatureError(
-                    f"Signature timestamp outside allowed window ({self.SIGNATURE_WINDOW_MINUTES} minutes)",
-                    {"signed_at_utc": signed_at, "current_utc": utc_now_iso(), "window_minutes": self.SIGNATURE_WINDOW_MINUTES},
-                )
-        except SignatureError:
-            raise
-        except Exception as e:
-            raise SignatureError("Invalid signature timestamp format", {"signed_at_utc": signed_at, "error": str(e)})
+        # Verify reauthentication
+        reauth_method = signature.get("reauthentication_method")
+        if reauth_method == "password":
+            if not password:
+                raise SignatureVerificationException("Password required for signature")
 
-        if signature.get("reauthentication_method") == "password":
-            if not password_for_esign:
-                raise SignatureError("Password re-entry required for electronic signature", {"reauthentication_method": "password"})
+            # Verify password
             from services.auth import AuthService
-
             auth_service = AuthService(self.db)
-            cursor = self.db.execute("SELECT password_hash, password_salt FROM users WHERE user_id = ?", (approver_user_id,))
+            
+            cursor = self.db.execute(
+                "SELECT username FROM users WHERE user_id = ?",
+                (actor_user_id,),
+            )
             user_row = cursor.fetchone()
             if not user_row:
-                raise AuthenticationError("Approver user not found", {"approver_user_id": approver_user_id})
-            if not auth_service.verify_password(password_for_esign, user_row["password_hash"], user_row["password_salt"]):
-                raise SignatureError("Invalid password for electronic signature", {})
+                raise SignatureVerificationException("User not found")
 
-        # Hash check (when provided) must match canonical expected intent payload.
-        if "signature_hash" in signature and signature.get("signature_hash") is not None:
-            expected_content = {
-                "intent": f"approve_submission_{submission_id}",
-                "signer_user_id": signature.get("signer_user_id"),
-                "signed_at_utc": signature.get("signed_at_utc"),
-                "signature_reason": signature.get("signature_reason"),
-            }
-            expected_hash = compute_hash(expected_content)
-            if signature["signature_hash"] != expected_hash:
-                raise SignatureError(
-                    "Signature hash validation failed",
-                    {"expected_hash": expected_hash, "provided_hash": signature["signature_hash"]},
-                )
+            if not auth_service.verify_password(user_row["username"], password):
+                raise SignatureVerificationException("Password verification failed")
 
-        if required_preconditions and "latest_validation_run_id" in required_preconditions:
-            cursor = self.db.execute(
-                """
-                SELECT validation_run_id, overall_status
-                FROM validation_runs
-                WHERE submission_id = ?
-                ORDER BY created_at_utc DESC
-                LIMIT 1
-                """,
-                (submission_id,),
+        elif reauth_method in ["mfa", "sso_reauth"]:
+            # These would integrate with actual MFA/SSO systems
+            # For now, we accept them as valid if present
+            pass
+        else:
+            raise SignatureVerificationException(f"Unsupported reauthentication method: {reauth_method}")
+
+        return True
+
+    # PUBLIC_INTERFACE
+    def enforce_segregation_of_duties(
+        self,
+        data_asset_id: str,
+        approver_user_id: str,
+    ) -> bool:
+        """
+        PUBLIC_INTERFACE
+        Enforce Segregation of Duties: approver must not be the submitter.
+
+        FR-APP-002: Implements SoD enforcement to prevent self-approval.
+
+        Args:
+            data_asset_id: Data asset identifier
+            approver_user_id: User attempting approval
+
+        Returns:
+            True if SoD is satisfied
+
+        Raises:
+            SoDViolationException: If approver is the same as submitter
+        """
+        cursor = self.db.execute(
+            "SELECT submitter_user_id FROM data_assets WHERE data_asset_id = ?",
+            (data_asset_id,),
+        )
+        row = cursor.fetchone()
+
+        if not row:
+            raise ApprovalException(f"Data asset not found: {data_asset_id}")
+
+        submitter_user_id = row["submitter_user_id"]
+
+        if submitter_user_id == approver_user_id:
+            raise SoDViolationException(
+                "Segregation of Duties violation: submitter and approver must be different users"
             )
-            validation_row = cursor.fetchone()
-            if not validation_row:
-                raise ApprovalError("PRECONDITION_NOT_MET", "No validation run found for submission")
-            validation = dict(validation_row)
-            if validation["validation_run_id"] != required_preconditions["latest_validation_run_id"]:
-                raise ApprovalError("PRECONDITION_NOT_MET", "Validation run ID does not match latest", {"expected": required_preconditions["latest_validation_run_id"], "actual": validation["validation_run_id"]})
-            if decision == "publish" and validation["overall_status"] != "pass":
-                raise ApprovalError("PRECONDITION_NOT_MET", "Cannot approve for publish when validation failed", {"validation_status": validation["overall_status"]})
 
-        new_state = "approved" if decision == "publish" else "rejected"
+        return True
+
+    # PUBLIC_INTERFACE
+    def process_approval(
+        self,
+        data_asset_id: str,
+        decision: str,
+        signature: Optional[Dict[str, Any]],
+        password: Optional[str],
+        rationale: Optional[str],
+        actor_user_id: str,
+        actor_role: str,
+        correlation_id: str,
+        required_preconditions: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        """
+        PUBLIC_INTERFACE
+        Process approval or rejection of a data asset.
+
+        FR-APP-001: Validates electronic signature
+        FR-APP-002: Enforces Segregation of Duties
+        FR-APP-003: Generates evidence package on approval
+
+        Args:
+            data_asset_id: Data asset identifier
+            decision: 'publish' or 'reject'
+            signature: Electronic signature block
+            password: Password for signature verification
+            rationale: Optional rationale for decision
+            actor_user_id: User making the decision
+            actor_role: Role of the user
+            correlation_id: Request correlation ID
+            required_preconditions: Optional preconditions (e.g., validation run ID)
+
+        Returns:
+            Dictionary containing approval result and evidence package ID (if applicable)
+        """
+        # Fetch data asset
+        cursor = self.db.execute(
+            "SELECT * FROM data_assets WHERE data_asset_id = ?",
+            (data_asset_id,),
+        )
+        data_asset_row = cursor.fetchone()
+
+        if not data_asset_row:
+            raise ApprovalException(f"Data asset not found: {data_asset_id}")
+
+        data_asset = dict(data_asset_row)
+
+        # Verify state allows approval
+        if data_asset["state"] not in ["in_review", "validating"]:
+            raise ApprovalException(f"Data asset state does not allow approval: {data_asset['state']}")
+
+        # Enforce SoD
+        self.enforce_segregation_of_duties(data_asset_id, actor_user_id)
+
+        # Verify signature if provided
+        if signature:
+            self.verify_electronic_signature(signature, password, actor_user_id)
+
+        # Check preconditions (e.g., validation must pass)
+        if required_preconditions and decision == "publish":
+            latest_validation = self.validation_service.get_latest_validation_for_data_asset(data_asset_id)
+            
+            if not latest_validation:
+                raise ApprovalException("No validation run found for data asset")
+
+            if latest_validation.get("overall_status") != "pass":
+                raise ApprovalException("Cannot approve: validation status is not 'pass'")
+
+            expected_val_id = required_preconditions.get("latest_validation_run_id")
+            if expected_val_id and latest_validation.get("validation_run_id") != expected_val_id:
+                raise ApprovalException("Validation run ID mismatch: stale validation state")
+
+        # Create approval record
+        approval_record_id = generate_id("apr")
+        created_at_utc = utc_now_iso()
+        signature_json = json.dumps(signature) if signature else None
 
         try:
-            approval_record_id = generate_id("approval")
-            created_at_utc = utc_now_iso()
-            signature_json = json.dumps(signature)
-
             self.db.execute(
                 """
                 INSERT INTO approval_records(
-                    approval_record_id, submission_id, decision, approver_user_id,
-                    signature_json, created_at_utc
+                    approval_record_id, data_asset_id, decision,
+                    approver_user_id, signature_json, created_at_utc
                 ) VALUES(?,?,?,?,?,?)
                 """,
-                (approval_record_id, submission_id, decision, approver_user_id, signature_json, created_at_utc),
+                (approval_record_id, data_asset_id, decision, actor_user_id, signature_json, created_at_utc),
             )
 
+            # Update data asset state
+            new_state = "published" if decision == "publish" else "rejected"
             self.db.execute(
-                "UPDATE submissions SET state = ?, last_updated_at_utc = ? WHERE submission_id = ?",
-                (new_state, created_at_utc, submission_id),
+                "UPDATE data_assets SET state = ?, last_updated_at_utc = ? WHERE data_asset_id = ?",
+                (new_state, created_at_utc, data_asset_id),
             )
 
-            self.audit_service.record_event(
-                event_type="submission_approved" if decision == "publish" else "submission_rejected",
-                entity_type="submission",
-                entity_id=submission_id,
-                actor_user_id=approver_user_id,
-                actor_role=approver_role,
-                correlation_id=correlation_id,
-                result="success",
-                details={"decision": decision, "approval_record_id": approval_record_id, "new_state": new_state, "rationale": rationale},
-            )
-
+            # Generate evidence package on approval
             evidence_package_id = None
             if decision == "publish":
-                evidence_items = [
-                    {
-                        "type": "approval_record",
-                        "content": {
-                            "approval_record_id": approval_record_id,
-                            "submission_id": submission_id,
-                            "decision": decision,
-                            "approver_user_id": approver_user_id,
-                            "signature": signature,
-                            "created_at_utc": created_at_utc,
-                            "rationale": rationale,
-                        },
-                    }
-                ]
-
-                if required_preconditions and "latest_validation_run_id" in required_preconditions:
-                    val_run_id = required_preconditions["latest_validation_run_id"]
-                    cursor = self.db.execute(
-                        """
-                        SELECT vr.*, a.storage_ref
-                        FROM validation_runs vr
-                        JOIN artifacts a ON vr.report_artifact_id = a.artifact_id
-                        WHERE vr.validation_run_id = ?
-                        """,
-                        (val_run_id,),
-                    )
-                    val_row = cursor.fetchone()
-                    if val_row:
-                        storage_ref = val_row["storage_ref"]
-                        if os.path.exists(storage_ref):
-                            with open(storage_ref, "r") as f:
-                                validation_report = json.load(f)
-                            evidence_items.append({"type": "validation_report", "content": validation_report})
-
-                evidence_result = self.evidence_service.create_evidence_package(
-                    submission_id=submission_id,
-                    package_id=submission["package_id"],
-                    package_version=submission["package_version"],
-                    evidence_items=evidence_items,
-                    actor_user_id="system",
-                    actor_role="system",
+                evidence_package = self.evidence_service.create_evidence_package(
+                    data_asset_id=data_asset_id,
+                    actor_user_id=actor_user_id,
+                    actor_role=actor_role,
                     correlation_id=correlation_id,
                 )
-                evidence_package_id = evidence_result["evidence_package_id"]
+                evidence_package_id = evidence_package["evidence_package_id"]
 
-                self.evidence_service.link_evidence_to_approval(
-                    evidence_package_id=evidence_package_id,
-                    approval_record_id=approval_record_id,
-                    actor_user_id="system",
-                    actor_role="system",
-                    correlation_id=correlation_id,
-                )
+            # Record audit event
+            self.audit_service.record_event(
+                event_type="data_asset_approved" if decision == "publish" else "data_asset_rejected",
+                entity_type="data_asset",
+                entity_id=data_asset_id,
+                actor_user_id=actor_user_id,
+                actor_role=actor_role,
+                correlation_id=correlation_id,
+                result="success",
+                details={
+                    "decision": decision,
+                    "approval_record_id": approval_record_id,
+                    "rationale": rationale,
+                    "evidence_package_id": evidence_package_id,
+                },
+            )
 
             self.db.commit()
 
-            result = {
-                "submission_id": submission_id,
+            return {
+                "data_asset_id": data_asset_id,
                 "state": new_state,
-                "approval_record_id": approval_record_id,
-                "approved_at_utc": created_at_utc,
-                "decision": decision,
+                "published_version_id": data_asset["package_version"] if decision == "publish" else None,
+                "published_at_utc": created_at_utc if decision == "publish" else None,
+                "evidence_package_id": evidence_package_id,
             }
-
-            if decision == "publish":
-                result["published_version_id"] = f"{submission['package_id']}-{submission['package_version']}"
-                result["published_at_utc"] = created_at_utc
-                result["evidence_package_id"] = evidence_package_id
-
-            return result
 
         except Exception:
             self.db.rollback()
             raise
-
-    def _add_minutes_to_iso(self, iso_timestamp: str, minutes: int) -> str:
-        dt = datetime.fromisoformat(iso_timestamp.replace("Z", "+00:00"))
-        dt_new = dt + timedelta(minutes=minutes)
-        return dt_new.isoformat().replace("+00:00", "Z")

@@ -291,14 +291,18 @@ def init_db() -> None:
     """
     )
 
-    # Submissions table
+    # Data assets table (formerly submissions)
+    # Metadata constrained to: title (required, 1-200 chars), description (optional, max 2000 chars), owner (required, 1-120 chars)
     conn.execute(
         """
-    CREATE TABLE IF NOT EXISTS submissions (
-        submission_id TEXT PRIMARY KEY,
+    CREATE TABLE IF NOT EXISTS data_assets (
+        data_asset_id TEXT PRIMARY KEY,
         draft_id TEXT NOT NULL,
         package_id TEXT NOT NULL,
         package_version TEXT NOT NULL,
+        title TEXT NOT NULL CHECK (length(title) >= 1 AND length(title) <= 200),
+        description TEXT CHECK (length(description) <= 2000),
+        owner TEXT NOT NULL CHECK (length(owner) >= 1 AND length(owner) <= 120),
         state TEXT NOT NULL CHECK (state IN ('validating','failed_validation','in_review','remediating','approved','published','rejected')),
         submitter_user_id TEXT NOT NULL,
         created_at_utc TEXT NOT NULL,
@@ -310,12 +314,31 @@ def init_db() -> None:
     """
     )
 
+    # Legacy submissions table for backward compatibility (view or empty table)
+    # This allows old code/tests referencing 'submissions' to continue working temporarily
+    conn.execute(
+        """
+    CREATE VIEW IF NOT EXISTS submissions AS
+    SELECT 
+        data_asset_id AS submission_id,
+        draft_id,
+        package_id,
+        package_version,
+        state,
+        submitter_user_id,
+        created_at_utc,
+        last_updated_at_utc,
+        active_deviation_id
+    FROM data_assets;
+    """
+    )
+
     # Pipeline jobs table
     conn.execute(
         """
     CREATE TABLE IF NOT EXISTS pipeline_jobs (
         pipeline_job_id TEXT PRIMARY KEY,
-        submission_id TEXT NOT NULL,
+        data_asset_id TEXT NOT NULL,
         job_type TEXT NOT NULL CHECK (job_type IN ('validate','publish','monitor')),
         state TEXT NOT NULL CHECK (state IN ('queued','running','succeeded','failed')),
         attempts INTEGER NOT NULL DEFAULT 0,
@@ -324,7 +347,7 @@ def init_db() -> None:
         created_at_utc TEXT NOT NULL,
         started_at_utc TEXT,
         finished_at_utc TEXT,
-        FOREIGN KEY(submission_id) REFERENCES submissions(submission_id)
+        FOREIGN KEY(data_asset_id) REFERENCES data_assets(data_asset_id)
     );
     """
     )
@@ -348,7 +371,7 @@ def init_db() -> None:
         """
     CREATE TABLE IF NOT EXISTS validation_runs (
         validation_run_id TEXT PRIMARY KEY,
-        submission_id TEXT NOT NULL,
+        data_asset_id TEXT NOT NULL,
         validation_profile TEXT NOT NULL,
         overall_status TEXT NOT NULL CHECK (overall_status IN ('pass','fail')),
         checks_json TEXT NOT NULL,
@@ -356,7 +379,7 @@ def init_db() -> None:
         report_artifact_id TEXT NOT NULL,
         report_hash_sha256 TEXT NOT NULL,
         created_at_utc TEXT NOT NULL,
-        FOREIGN KEY(submission_id) REFERENCES submissions(submission_id),
+        FOREIGN KEY(data_asset_id) REFERENCES data_assets(data_asset_id),
         FOREIGN KEY(report_artifact_id) REFERENCES artifacts(artifact_id)
     );
     """
@@ -367,11 +390,11 @@ def init_db() -> None:
         """
     CREATE TABLE IF NOT EXISTS review_logs (
         review_log_id TEXT PRIMARY KEY,
-        submission_id TEXT NOT NULL,
+        data_asset_id TEXT NOT NULL,
         reviewer_user_id TEXT NOT NULL,
         notes TEXT,
         created_at_utc TEXT NOT NULL,
-        FOREIGN KEY(submission_id) REFERENCES submissions(submission_id),
+        FOREIGN KEY(data_asset_id) REFERENCES data_assets(data_asset_id),
         FOREIGN KEY(reviewer_user_id) REFERENCES users(user_id)
     );
     """
@@ -382,12 +405,12 @@ def init_db() -> None:
         """
     CREATE TABLE IF NOT EXISTS approval_records (
         approval_record_id TEXT PRIMARY KEY,
-        submission_id TEXT NOT NULL,
+        data_asset_id TEXT NOT NULL,
         decision TEXT NOT NULL CHECK (decision IN ('publish','reject')),
         approver_user_id TEXT NOT NULL,
         signature_json TEXT NOT NULL,
         created_at_utc TEXT NOT NULL,
-        FOREIGN KEY(submission_id) REFERENCES submissions(submission_id),
+        FOREIGN KEY(data_asset_id) REFERENCES data_assets(data_asset_id),
         FOREIGN KEY(approver_user_id) REFERENCES users(user_id)
     );
     """
@@ -398,7 +421,7 @@ def init_db() -> None:
         """
     CREATE TABLE IF NOT EXISTS deviations (
         deviation_id TEXT PRIMARY KEY,
-        submission_id TEXT NOT NULL,
+        data_asset_id TEXT NOT NULL,
         state TEXT NOT NULL CHECK (state IN ('requested','pending_secondary_approval','approved','rejected','expired')),
         justification TEXT NOT NULL,
         capa_plan TEXT NOT NULL,
@@ -409,7 +432,7 @@ def init_db() -> None:
         secondary_signature_json TEXT,
         created_at_utc TEXT NOT NULL,
         updated_at_utc TEXT NOT NULL,
-        FOREIGN KEY(submission_id) REFERENCES submissions(submission_id),
+        FOREIGN KEY(data_asset_id) REFERENCES data_assets(data_asset_id),
         FOREIGN KEY(requested_by_user_id) REFERENCES users(user_id),
         FOREIGN KEY(secondary_approver_user_id) REFERENCES users(user_id)
     );
@@ -421,13 +444,13 @@ def init_db() -> None:
         """
     CREATE TABLE IF NOT EXISTS evidence_packages (
         evidence_package_id TEXT PRIMARY KEY,
-        submission_id TEXT NOT NULL,
+        data_asset_id TEXT NOT NULL,
         package_id TEXT NOT NULL,
         package_version TEXT NOT NULL,
         minted_identifier TEXT NOT NULL,
         manifest_artifact_id TEXT NOT NULL,
         created_at_utc TEXT NOT NULL,
-        FOREIGN KEY(submission_id) REFERENCES submissions(submission_id),
+        FOREIGN KEY(data_asset_id) REFERENCES data_assets(data_asset_id),
         FOREIGN KEY(manifest_artifact_id) REFERENCES artifacts(artifact_id)
     );
     """
@@ -468,12 +491,12 @@ def init_db() -> None:
     )
 
     # Create indexes
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_submissions_package ON submissions(package_id, package_version);")
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_submissions_state ON submissions(state);")
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_validation_runs_submission ON validation_runs(submission_id, created_at_utc);")
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_pipeline_jobs_submission ON pipeline_jobs(submission_id, created_at_utc);")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_data_assets_package ON data_assets(package_id, package_version);")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_data_assets_state ON data_assets(state);")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_validation_runs_data_asset ON validation_runs(data_asset_id, created_at_utc);")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_pipeline_jobs_data_asset ON pipeline_jobs(data_asset_id, created_at_utc);")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_audit_events_entity ON audit_events(entity_type, entity_id, timestamp_utc);")
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_evidence_packages_submission ON evidence_packages(submission_id);")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_evidence_packages_data_asset ON evidence_packages(data_asset_id);")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_monitoring_events_package ON monitoring_events(package_id, package_version, created_at_utc);")
 
     conn.commit()

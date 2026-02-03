@@ -1,407 +1,264 @@
 """
 PUBLIC_INTERFACE
-Submissions router for data product submission and approval workflow.
+Submissions router - backward compatibility wrapper for data assets.
 
-Implements:
-- FR-DPP-001: Dataset submission endpoint
-- FR-DPP-003: Identity capture for submissions
-- FR-VAL-001: Validation triggering endpoint
-- FR-APR-001: Approval/rejection with electronic signature
-- FR-APR-002: SoD enforcement in approval workflow
-- FR-AUTH-001: Authentication requirement for all endpoints
-- FR-AUTH-002: Role-based access control
+DEPRECATED: This router provides backward compatibility for existing clients.
+New clients should use /api/v1/data-assets endpoints instead.
+
+All 'submission' terminology is deprecated in favor of 'data asset'.
 """
-from fastapi import APIRouter, HTTPException, Security, Body
-from fastapi.security import HTTPAuthorizationCredentials
-from pydantic import ValidationError
+from typing import Any, Dict
+from fastapi import APIRouter, Depends, HTTPException, status, Request
+from fastapi.responses import JSONResponse
 
 from database import get_connection
+from services.data_asset import DataAssetService
+from services.validation import ValidationService
+from services.approval import ApprovalService, SoDViolationException, SignatureVerificationException
+from services.auth import AuthService, get_current_user
 from schemas import (
     CreateSubmissionRequest,
     CreateSubmissionResponse,
     GetSubmissionResponse,
-    ApproveSubmissionRequest,
-    ApproveSubmissionResponse,
     TriggerValidationRequest,
     TriggerValidationResponse,
+    ApproveSubmissionRequest,
+    ApproveSubmissionResponse,
     ErrorResponse,
 )
-from services.submission import SubmissionService
-from services.validation import ValidationService
-from services.approval import (
-    ApprovalService,
-    ApprovalError,
-    AuthenticationError,
-    AuthorizationError,
-    SoDViolationError,
-    SignatureError,
-    InvalidStateError,
-)
-from services.auth import AuthService, security, get_current_user_dep
-from utils import make_error_response, generate_id
 
-router = APIRouter(
-    prefix="/api/v1/submissions",
-    tags=["submissions"],
-    responses={
-        401: {"model": ErrorResponse, "description": "Authentication failed"},
-        403: {"model": ErrorResponse, "description": "Authorization failed"},
-        500: {"model": ErrorResponse, "description": "Internal server error"},
-    },
-)
+router = APIRouter(prefix="/api/v1/submissions", tags=["submissions"])
 
 
+def add_deprecation_header(response: JSONResponse) -> JSONResponse:
+    """Add deprecation warning header to response."""
+    response.headers["X-API-Deprecated"] = "true"
+    response.headers["X-API-Deprecation-Message"] = "Use /api/v1/data-assets endpoints instead"
+    return response
+
+
+# PUBLIC_INTERFACE
 @router.post(
     "",
     response_model=CreateSubmissionResponse,
-    status_code=201,
+    status_code=status.HTTP_201_CREATED,
     summary="Create a submission",
-    description="Create a submission from a draft and trigger validation pipeline. Requires authentication.",
+    description="Create a submission from a draft and trigger validation pipeline. Requires authentication. DEPRECATED: Use /api/v1/data-assets instead.",
     operation_id="create_submission",
     responses={
         201: {"description": "Submission created and validation queued"},
-        400: {"model": ErrorResponse, "description": "Invalid request or draft not found"},
-        401: {"model": ErrorResponse, "description": "Authentication required"},
+        400: {"description": "Invalid request or draft not found", "model": ErrorResponse},
+        401: {"description": "Authentication required", "model": ErrorResponse},
+        403: {"description": "Authorization failed", "model": ErrorResponse},
+        500: {"description": "Internal server error", "model": ErrorResponse},
     },
+    deprecated=True,
 )
-async def create_submission(
-    user=Security(get_current_user_dep),
-    payload: dict = Body(default=None),
-) -> CreateSubmissionResponse:
+def create_submission(
+    payload: Dict[str, Any],
+    current_user: Dict[str, Any] = Depends(get_current_user),
+):
     """
     PUBLIC_INTERFACE
-    Create a submission from a draft.
-
-    Important: Authentication must be evaluated before request body validation so that
-    missing/invalid Authorization headers return HTTP 401 (not 422).
-
-    Implementation note:
-      - We accept a raw dict payload and validate it *after* auth succeeds.
-      - This ensures `/api/v1/submissions` returns 401 on missing/invalid token
-        even if the request body is malformed.
+    Create a submission (deprecated - maps to data asset creation).
     """
-    # `user` is resolved via dependency first; if auth is missing/invalid it will raise 401 here.
-    db = get_connection()
-
-    # Deterministic correlation id even if payload is missing/invalid
-    correlation_id = generate_id("req")
     try:
-        if payload and isinstance(payload, dict):
-            ac = payload.get("audit_context") or {}
-            if isinstance(ac, dict) and ac.get("client_request_id"):
-                correlation_id = ac["client_request_id"]
-    except Exception:
-        pass
+        conn = get_connection()
+        service = DataAssetService(conn)
 
-    try:
-        if payload is None:
-            raise HTTPException(
-                status_code=400,
-                detail=make_error_response("INVALID_REQUEST", "Missing request body", correlation_id),
-            )
+        # Extract draft_id from payload (flexible format)
+        draft_id = payload.get("draft_id")
+        if not draft_id:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="draft_id is required")
 
-        try:
-            request = CreateSubmissionRequest.model_validate(payload)
-        except ValidationError as ve:
-            raise HTTPException(
-                status_code=422,
-                detail={"detail": ve.errors()},
-            )
-
-        # Now safe to use validated audit_context
-        correlation_id = request.audit_context.client_request_id
-
-        if request.audit_context.actor_user_id != user["user_id"]:
-            raise HTTPException(
-                status_code=403,
-                detail=make_error_response(
-                    "AUTHORIZATION_FAILED",
-                    "audit_context.actor_user_id must match authenticated user",
-                    correlation_id,
-                    {"expected": user["user_id"], "provided": request.audit_context.actor_user_id},
-                ),
-            )
-
-        if request.audit_context.actor_role != user["role"]:
-            raise HTTPException(
-                status_code=403,
-                detail=make_error_response(
-                    "AUTHORIZATION_FAILED",
-                    "audit_context.actor_role must match authenticated user role",
-                    correlation_id,
-                    {"expected": user["role"], "provided": request.audit_context.actor_role},
-                ),
-            )
-
-        submission_service = SubmissionService(db)
-        result = submission_service.create_submission(
-            draft_id=request.draft_id,
-            actor_user_id=user["user_id"],
-            actor_role=user["role"],
-            correlation_id=correlation_id,
+        # Use default metadata for backward compatibility
+        result = service.create_submission(
+            draft_id=draft_id,
+            actor_user_id=current_user["user_id"],
+            actor_role=current_user.get("primary_role", "publisher"),
+            correlation_id=payload.get("audit_context", {}).get("client_request_id", "legacy"),
         )
 
-        return CreateSubmissionResponse(**result)
+        response = JSONResponse(
+            status_code=status.HTTP_201_CREATED,
+            content=result,
+        )
+        return add_deprecation_header(response)
 
     except ValueError as e:
-        raise HTTPException(
-            status_code=400,
-            detail=make_error_response("INVALID_REQUEST", str(e), correlation_id),
-        )
-    except HTTPException:
-        raise
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
     except Exception as e:
-        raise HTTPException(
-            status_code=500,
-            detail=make_error_response(
-                "INTERNAL_ERROR",
-                f"Failed to create submission: {str(e)}",
-                correlation_id,
-            ),
-        )
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
 
 
+# PUBLIC_INTERFACE
 @router.get(
     "/{submission_id}",
     response_model=GetSubmissionResponse,
     summary="Get submission",
-    description="Retrieve submission details including current state and validation status.",
+    description="Retrieve submission details including current state and validation status. DEPRECATED: Use /api/v1/data-assets/{id} instead.",
     operation_id="get_submission",
     responses={
         200: {"description": "Submission details retrieved"},
-        404: {"model": ErrorResponse, "description": "Submission not found"},
+        401: {"description": "Authentication failed", "model": ErrorResponse},
+        403: {"description": "Authorization failed", "model": ErrorResponse},
+        404: {"description": "Submission not found", "model": ErrorResponse},
+        500: {"description": "Internal server error", "model": ErrorResponse},
     },
+    deprecated=True,
 )
-async def get_submission(
+def get_submission(
     submission_id: str,
-    credentials: HTTPAuthorizationCredentials = Security(security),
-) -> GetSubmissionResponse:
+    current_user: Dict[str, Any] = Depends(get_current_user),
+):
     """
     PUBLIC_INTERFACE
-    Get submission by ID.
+    Get a submission by ID (maps to data asset).
     """
-    db = get_connection()
-    auth_service = AuthService(db)
-
     try:
-        auth_service.get_current_user(credentials)
+        conn = get_connection()
+        service = DataAssetService(conn)
+        validation_service = ValidationService(conn)
 
-        submission_service = SubmissionService(db)
-        submission = submission_service.get_submission(submission_id)
+        data_asset = service.get_data_asset(submission_id)
+        if not data_asset:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Submission not found")
 
-        if not submission:
-            raise HTTPException(
-                status_code=404,
-                detail=make_error_response("NOT_FOUND", f"Submission {submission_id} not found", generate_id("req")),
-            )
+        # Get latest validation run if any
+        latest_validation = validation_service.get_latest_validation_for_data_asset(submission_id)
 
-        validation_service = ValidationService(db)
-        validation_runs = validation_service.list_validation_runs(submission_id)
-        latest_validation_run_id = validation_runs[0]["validation_run_id"] if validation_runs else None
+        response_data = {
+            "submission_id": data_asset["data_asset_id"],
+            "package_id": data_asset["package_id"],
+            "package_version": data_asset["package_version"],
+            "state": data_asset["state"],
+            "latest_validation_run_id": latest_validation.get("validation_run_id") if latest_validation else None,
+            "active_deviation": bool(data_asset.get("active_deviation_id")),
+            "created_at_utc": data_asset["created_at_utc"],
+            "last_updated_at_utc": data_asset["last_updated_at_utc"],
+        }
 
-        return GetSubmissionResponse(
-            submission_id=submission["submission_id"],
-            package_id=submission["package_id"],
-            package_version=submission["package_version"],
-            state=submission["state"],
-            latest_validation_run_id=latest_validation_run_id,
-            active_deviation=bool(submission.get("active_deviation_id")),
-            created_at_utc=submission["created_at_utc"],
-            last_updated_at_utc=submission["last_updated_at_utc"],
-        )
+        response = JSONResponse(content=response_data)
+        return add_deprecation_header(response)
 
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(
-            status_code=500,
-            detail=make_error_response("INTERNAL_ERROR", f"Failed to get submission: {str(e)}", generate_id("req")),
-        )
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
 
 
+# PUBLIC_INTERFACE
 @router.post(
     "/{submission_id}/validate",
     response_model=TriggerValidationResponse,
     summary="Trigger validation",
-    description="Trigger validation run for a submission. Creates validation job and executes quality gates.",
+    description="Trigger validation run for a submission. Creates validation job and executes quality gates. DEPRECATED: Use /api/v1/data-assets/{id}/validate instead.",
     operation_id="trigger_validation",
     responses={
         200: {"description": "Validation triggered successfully"},
-        400: {"model": ErrorResponse, "description": "Invalid submission state"},
-        404: {"model": ErrorResponse, "description": "Submission not found"},
+        400: {"description": "Invalid submission state", "model": ErrorResponse},
+        401: {"description": "Authentication failed", "model": ErrorResponse},
+        403: {"description": "Authorization failed", "model": ErrorResponse},
+        404: {"description": "Submission not found", "model": ErrorResponse},
+        500: {"description": "Internal server error", "model": ErrorResponse},
     },
+    deprecated=True,
 )
-async def trigger_validation(
+def trigger_validation(
     submission_id: str,
     request: TriggerValidationRequest,
-    credentials: HTTPAuthorizationCredentials = Security(security),
-) -> TriggerValidationResponse:
+    current_user: Dict[str, Any] = Depends(get_current_user),
+):
     """
     PUBLIC_INTERFACE
-    Trigger validation run for a submission.
+    Trigger validation for a submission (maps to data asset).
     """
-    db = get_connection()
-    auth_service = AuthService(db)
-
     try:
-        user = auth_service.get_current_user(credentials)
+        conn = get_connection()
+        validation_service = ValidationService(conn)
 
-        if request.audit_context.actor_user_id != user["user_id"]:
-            raise HTTPException(
-                status_code=403,
-                detail=make_error_response(
-                    "AUTHORIZATION_FAILED",
-                    "audit_context.actor_user_id must match authenticated user",
-                    request.audit_context.client_request_id,
-                ),
-            )
-
-        validation_service = ValidationService(db)
-        validation_service.run_validation(
-            submission_id=submission_id,
-            validation_profile=request.validation_profile,
-            actor_user_id=user["user_id"],
-            actor_role=user["role"],
+        result = validation_service.execute_validation_run(
+            data_asset_id=submission_id,
+            profile=request.validation_profile,
+            actor_user_id=current_user["user_id"],
+            actor_role=current_user.get("primary_role", "publisher"),
             correlation_id=request.audit_context.client_request_id,
         )
 
-        return TriggerValidationResponse(
-            pipeline_job_id=generate_id("job"),
-            state="succeeded",
-            audit_event_id=generate_id("audit"),
-        )
+        response_data = {
+            "pipeline_job_id": result["validation_run_id"],
+            "state": "completed",
+            "audit_event_id": result["validation_run_id"],
+        }
+
+        response = JSONResponse(content=response_data)
+        return add_deprecation_header(response)
 
     except ValueError as e:
-        raise HTTPException(
-            status_code=400,
-            detail=make_error_response("INVALID_REQUEST", str(e), request.audit_context.client_request_id),
-        )
-    except HTTPException:
-        raise
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
     except Exception as e:
-        raise HTTPException(
-            status_code=500,
-            detail=make_error_response(
-                "INTERNAL_ERROR",
-                f"Failed to trigger validation: {str(e)}",
-                request.audit_context.client_request_id,
-            ),
-        )
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
 
 
+# PUBLIC_INTERFACE
 @router.post(
     "/{submission_id}/approve",
     response_model=ApproveSubmissionResponse,
     summary="Approve or reject submission",
-    description="Approve or reject a submission with electronic signature and SoD validation. Creates evidence package on approval.",
+    description="Approve or reject a submission with electronic signature and SoD validation. Creates evidence package on approval. DEPRECATED: Use /api/v1/data-assets/{id}/approve instead.",
     operation_id="approve_submission",
     responses={
         200: {"description": "Submission approved or rejected"},
-        400: {"model": ErrorResponse, "description": "Invalid request or preconditions not met"},
-        403: {"model": ErrorResponse, "description": "Authorization failed or SoD violation"},
-        404: {"model": ErrorResponse, "description": "Submission not found"},
-        409: {"model": ErrorResponse, "description": "Invalid state or validation failed"},
+        400: {"description": "Invalid request or preconditions not met", "model": ErrorResponse},
+        401: {"description": "Authentication failed", "model": ErrorResponse},
+        403: {"description": "Authorization failed or SoD violation", "model": ErrorResponse},
+        404: {"description": "Submission not found", "model": ErrorResponse},
+        409: {"description": "Invalid state or validation failed", "model": ErrorResponse},
+        500: {"description": "Internal server error", "model": ErrorResponse},
     },
+    deprecated=True,
 )
-async def approve_submission(
+def approve_submission(
     submission_id: str,
     request: ApproveSubmissionRequest,
-    credentials: HTTPAuthorizationCredentials = Security(security),
-) -> ApproveSubmissionResponse:
+    current_user: Dict[str, Any] = Depends(get_current_user),
+):
     """
     PUBLIC_INTERFACE
-    Approve or reject a submission.
+    Approve or reject a submission (maps to data asset).
     """
-    db = get_connection()
-    auth_service = AuthService(db)
-
     try:
-        user = auth_service.get_current_user(credentials)
+        conn = get_connection()
+        approval_service = ApprovalService(conn)
 
-        if request.audit_context.actor_user_id != user["user_id"]:
-            raise HTTPException(
-                status_code=403,
-                detail=make_error_response(
-                    "AUTHORIZATION_FAILED",
-                    "audit_context.actor_user_id must match authenticated user",
-                    request.audit_context.client_request_id,
-                ),
-            )
-
-        if request.audit_context.actor_role != user["role"]:
-            raise HTTPException(
-                status_code=403,
-                detail=make_error_response(
-                    "AUTHORIZATION_FAILED",
-                    "audit_context.actor_role must match authenticated user role",
-                    request.audit_context.client_request_id,
-                    {"expected": user["role"], "provided": request.audit_context.actor_role},
-                ),
-            )
-
-        # Some contract tests reference deterministic IDs like `sub-1` without prior creation.
-        # This is intentionally narrow and only provisions a minimal record for those IDs.
-        SubmissionService(db).ensure_minimal_submission_for_tests(submission_id)
-
-        approval_service = ApprovalService(db)
-        result = approval_service.approve_submission(
-            submission_id=submission_id,
+        result = approval_service.process_approval(
+            data_asset_id=submission_id,
             decision=request.decision,
-            approver_user_id=user["user_id"],
-            approver_role=user["role"],
-            signature=request.signature.dict() if request.signature else None,
-            correlation_id=request.audit_context.client_request_id,
-            required_preconditions=request.required_preconditions.dict() if request.required_preconditions else None,
+            signature=request.signature.model_dump() if request.signature else None,
+            password=request.password,
             rationale=request.rationale,
-            password_for_esign=request.password,
+            actor_user_id=current_user["user_id"],
+            actor_role=current_user.get("primary_role", "steward"),
+            correlation_id=request.audit_context.client_request_id,
+            required_preconditions=request.required_preconditions.model_dump() if request.required_preconditions else None,
         )
 
-        return ApproveSubmissionResponse(
-            submission_id=result["submission_id"],
-            state=result["state"],
-            published_version_id=result.get("published_version_id"),
-            published_at_utc=result.get("published_at_utc"),
-            evidence_package_id=result.get("evidence_package_id"),
-        )
+        response_data = {
+            "submission_id": result["data_asset_id"],
+            "state": result["state"],
+            "published_version_id": result.get("published_version_id"),
+            "published_at_utc": result.get("published_at_utc"),
+            "evidence_package_id": result.get("evidence_package_id"),
+        }
 
-    except AuthenticationError as e:
-        raise HTTPException(
-            status_code=401,
-            detail=make_error_response(e.code, e.message, request.audit_context.client_request_id, e.details),
-        )
-    except AuthorizationError as e:
-        raise HTTPException(
-            status_code=403,
-            detail=make_error_response(e.code, e.message, request.audit_context.client_request_id, e.details),
-        )
-    except SoDViolationError as e:
-        raise HTTPException(
-            status_code=409,
-            detail=make_error_response(e.code, e.message, request.audit_context.client_request_id, e.details),
-        )
-    except SignatureError as e:
-        raise HTTPException(
-            status_code=409,
-            detail=make_error_response(e.code, e.message, request.audit_context.client_request_id, e.details),
-        )
-    except InvalidStateError as e:
-        raise HTTPException(
-            status_code=409,
-            detail=make_error_response(e.code, e.message, request.audit_context.client_request_id, e.details),
-        )
-    except ApprovalError as e:
-        raise HTTPException(
-            status_code=400,
-            detail=make_error_response(e.code, e.message, request.audit_context.client_request_id, e.details),
-        )
-    except HTTPException:
-        raise
+        response = JSONResponse(content=response_data)
+        return add_deprecation_header(response)
+
+    except SoDViolationException as e:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(e))
+    except SignatureVerificationException as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
     except Exception as e:
-        raise HTTPException(
-            status_code=500,
-            detail=make_error_response(
-                "INTERNAL_ERROR",
-                f"Failed to approve submission: {str(e)}",
-                request.audit_context.client_request_id,
-            ),
-        )
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))

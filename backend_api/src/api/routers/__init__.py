@@ -1,6 +1,6 @@
 """
-Routers module for data product publishing API.
+Routers for the Data Product Publishing API.
 """
-from . import drafts, submissions, validation, audit, evidence, auth
+from . import auth, drafts, data_assets, submissions, validation, audit, evidence, submissions_compat
 
-__all__ = ['auth', 'drafts', 'submissions', 'validation', 'audit', 'evidence']
+__all__ = ["auth", "drafts", "data_assets", "submissions", "validation", "audit", "evidence", "submissions_compat"]

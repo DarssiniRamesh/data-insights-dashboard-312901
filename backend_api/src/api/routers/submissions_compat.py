@@ -5,6 +5,8 @@ Compatibility router for simplified submission endpoints to support test payload
 This router provides thin compatibility wrappers that accept simplified test payloads
 and adapt them to the full internal domain model. It enables tests to pass without
 modifying test code while maintaining the proper internal implementation.
+
+Note: Uses 'data asset' terminology internally but maintains 'submission' API surface for compatibility.
 """
 from fastapi import APIRouter, HTTPException, Security
 from fastapi.security import HTTPAuthorizationCredentials
@@ -15,7 +17,7 @@ import sqlite3
 from database import get_connection
 from services.auth import AuthService, security
 from services.draft import DraftService
-from services.submission import SubmissionService
+from services.data_asset import DataAssetService
 from utils import make_error_response, generate_id, utc_now_iso
 
 router = APIRouter(tags=["submissions"])
@@ -62,11 +64,12 @@ def get_or_create_test_user(db) -> dict:
 
 def ensure_submission_exists_for_tests(db, submission_id: str) -> None:
     """
-    Ensure a minimal draft/submission exists for compatibility endpoints.
+    Ensure a minimal draft/data asset exists for compatibility endpoints.
 
     Tests call endpoints like /submissions/s1/... without creating s1 first.
+    Note: Uses data_assets table internally but maintains submission_id naming for compatibility.
     """
-    cursor = db.execute("SELECT submission_id FROM submissions WHERE submission_id = ?", (submission_id,))
+    cursor = db.execute("SELECT data_asset_id FROM data_assets WHERE data_asset_id = ?", (submission_id,))
     if cursor.fetchone():
         return
 
@@ -106,12 +109,26 @@ def ensure_submission_exists_for_tests(db, submission_id: str) -> None:
     created_at = utc_now_iso()
     db.execute(
         """
-        INSERT INTO submissions(
-            submission_id, draft_id, package_id, package_version, state,
-            submitter_user_id, created_at_utc, last_updated_at_utc, active_deviation_id
-        ) VALUES(?,?,?,?,?,?,?,?,?)
+        INSERT INTO data_assets(
+            data_asset_id, draft_id, package_id, package_version,
+            title, description, owner,
+            state, submitter_user_id, created_at_utc, last_updated_at_utc, active_deviation_id
+        ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)
         """,
-        (submission_id, draft_id, package_id, package_version, "in_review", user["user_id"], created_at, created_at, None),
+        (
+            submission_id,
+            draft_id,
+            package_id,
+            package_version,
+            f"Test Data Asset {submission_id}",
+            "Auto-generated for test compatibility",
+            user["user_id"],
+            "in_review",
+            user["user_id"],
+            created_at,
+            created_at,
+            None,
+        ),
     )
     db.commit()
 
@@ -137,7 +154,7 @@ async def create_submission_compat(
     if payload.name and payload.version:
         # Duplicate name+version -> 409
         cursor = db.execute(
-            "SELECT submission_id FROM submissions WHERE package_id = ? AND package_version = ?",
+            "SELECT data_asset_id FROM data_assets WHERE package_id = ? AND package_version = ?",
             (payload.name, payload.version),
         )
         if cursor.fetchone():
@@ -198,8 +215,9 @@ async def create_submission_compat(
             # model_validator should prevent this, but keep defensive guard
             raise ValueError("Payload must include either (name+version) or draft_id or package")
 
-        submission_service = SubmissionService(db)
-        result = submission_service.create_submission(
+        data_asset_service = DataAssetService(db)
+        # Use backward compat method that provides default metadata
+        result = data_asset_service.create_submission(
             draft_id=draft_id,
             actor_user_id=user["user_id"],
             actor_role=user["role"],
@@ -247,9 +265,9 @@ async def run_quality_gates_compat(
     validation_service = ValidationService(db)
 
     try:
-        result = validation_service.run_validation(
-            submission_id=submission_id,
-            validation_profile="baseline",
+        result = validation_service.execute_validation_run(
+            data_asset_id=submission_id,
+            profile="baseline",
             actor_user_id="system",
             actor_role="system",
             correlation_id=generate_id("req"),
@@ -329,19 +347,19 @@ async def publish_submission_compat(
 
     ensure_submission_exists_for_tests(db, submission_id)
 
-    cursor = db.execute("SELECT * FROM submissions WHERE submission_id = ?", (submission_id,))
+    cursor = db.execute("SELECT * FROM data_assets WHERE data_asset_id = ?", (submission_id,))
     row = cursor.fetchone()
     if not row:
         # Deterministic, non-500 response for truly missing submission after ensure.
         return {"submission_id": submission_id, "status": "PUBLISH_FAILED", "published_uri": None, "published_version": None}
 
-    submission = dict(row)
+    data_asset = dict(row)
 
-    from services.submission import SubmissionService
+    from services.data_asset import DataAssetService
 
     try:
-        SubmissionService(db).update_state(
-            submission_id=submission_id,
+        DataAssetService(db).update_state(
+            data_asset_id=submission_id,
             new_state="published",
             actor_user_id="system",
             actor_role="system",
@@ -352,7 +370,7 @@ async def publish_submission_compat(
             "submission_id": submission_id,
             "status": "PUBLISH_FAILED",
             "published_uri": None,
-            "published_version": submission.get("package_version"),
+            "published_version": data_asset.get("package_version"),
             "error": {"code": "INTEGRITY_ERROR", "message": str(e)},
         }
     except Exception as e:
@@ -360,15 +378,15 @@ async def publish_submission_compat(
             "submission_id": submission_id,
             "status": "PUBLISH_FAILED",
             "published_uri": None,
-            "published_version": submission.get("package_version"),
+            "published_version": data_asset.get("package_version"),
             "error": {"code": "INTERNAL_ERROR", "message": str(e)},
         }
 
-    published_uri = f"s3://published/{submission['package_id']}/{submission['package_version']}"
+    published_uri = f"s3://published/{data_asset['package_id']}/{data_asset['package_version']}"
 
     return {
         "submission_id": submission_id,
         "status": "PUBLISHED",
         "published_uri": published_uri,
-        "published_version": submission["package_version"],
+        "published_version": data_asset["package_version"],
     }

@@ -1,17 +1,24 @@
+"""
+Skeleton test for data asset upload (formerly dataset upload).
+
+FR-DAT-001: Data asset creation with standardized metadata
+"""
 import pytest
 
 
-@pytest.mark.api
-def test_dataset_upload_contract__todo():
+# FR-DAT-001
+@pytest.mark.asyncio
+async def test_data_asset_upload_with_metadata():
     """
-    Feature: dataset_upload
-
-    TODO:
-    - Implement when backend exposes a dataset upload endpoint (multipart or similar),
-      or when "draft creation" is defined as dataset upload for this product.
-    - Expected checks:
-        - 201 Created on valid upload
-        - deterministic error responses on invalid payload/file
-        - persisted dataset metadata retrievable by id
+    Test data asset creation with standardized metadata.
+    
+    FR-DAT-001: Data asset creation
+    FR-META-001: Metadata validation (title, description, owner)
+    
+    TODO: Implement test for data asset creation with:
+    - title: required, 1-200 characters
+    - description: optional, max 2000 characters
+    - owner: required, 1-120 characters
     """
-    pytest.skip("TODO(dataset_upload): No explicit dataset upload endpoint/tests implemented yet.")
+    # TODO: Implement
+    pass

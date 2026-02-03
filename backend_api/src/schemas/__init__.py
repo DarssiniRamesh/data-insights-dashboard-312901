@@ -1,9 +1,11 @@
 """
 Pydantic schemas for API request/response models.
+
+Standard terminology: 'data asset' with metadata constrained to title, description, owner.
 """
 from datetime import datetime, timezone
 from typing import Optional, List, Dict, Any, Literal
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator, ConfigDict
 
 
 class AuditContext(BaseModel):
@@ -29,6 +31,56 @@ class ErrorResponse(BaseModel):
     error: Dict[str, Any]
 
 
+# Data Asset Metadata Models (standardized to title, description, owner)
+class DataAssetMetadata(BaseModel):
+    """
+    Data asset metadata with standardized fields.
+    
+    Fields:
+    - title: Required, 1-200 characters
+    - description: Optional, max 2000 characters
+    - owner: Required, 1-120 characters (email, username, or identifier)
+    """
+    model_config = ConfigDict(extra='forbid')
+    
+    title: str = Field(..., min_length=1, max_length=200, description="Data asset title (required, 1-200 chars)")
+    description: Optional[str] = Field(None, max_length=2000, description="Data asset description (optional, max 2000 chars)")
+    owner: str = Field(..., min_length=1, max_length=120, description="Data asset owner identifier (required, 1-120 chars)")
+
+    @field_validator('title', 'owner')
+    @classmethod
+    def validate_non_empty(cls, v: str) -> str:
+        """Ensure title and owner are not just whitespace."""
+        if not v or not v.strip():
+            raise ValueError("Field must not be empty or whitespace only")
+        return v.strip()
+
+    @field_validator('description')
+    @classmethod
+    def validate_description(cls, v: Optional[str]) -> Optional[str]:
+        """Trim description if provided."""
+        if v is not None:
+            return v.strip() if v.strip() else None
+        return v
+
+
+class DataAssetCreate(BaseModel):
+    """Request to create a data asset with standardized metadata."""
+    model_config = ConfigDict(extra='forbid')
+    
+    metadata: DataAssetMetadata = Field(..., description="Data asset metadata (title, description, owner)")
+    audit_context: AuditContext
+
+
+class DataAssetUpdate(BaseModel):
+    """Request to update data asset metadata."""
+    model_config = ConfigDict(extra='forbid')
+    
+    metadata: DataAssetMetadata = Field(..., description="Updated data asset metadata")
+    audit_context: AuditContext
+
+
+# Legacy models for backward compatibility
 class DatasetReference(BaseModel):
     """Dataset reference in package."""
     format: str
@@ -93,32 +145,45 @@ class CreateDraftResponse(BaseModel):
     audit_event_id: str
 
 
-class CreateSubmissionRequest(BaseModel):
-    """Request to create a submission."""
+class CreateDataAssetRequest(BaseModel):
+    """Request to create a data asset."""
     draft_id: str
+    metadata: DataAssetMetadata = Field(..., description="Data asset metadata (title, description, owner)")
     audit_context: AuditContext
 
 
-class CreateSubmissionResponse(BaseModel):
-    """Response from creating a submission."""
-    submission_id: str
+class CreateDataAssetResponse(BaseModel):
+    """Response from creating a data asset."""
+    data_asset_id: str
     package_id: str
     package_version: str
+    title: str
+    description: Optional[str]
+    owner: str
     state: str
     created_at_utc: str
     audit_event_id: str
 
 
-class GetSubmissionResponse(BaseModel):
-    """Response from getting a submission."""
-    submission_id: str
+class GetDataAssetResponse(BaseModel):
+    """Response from getting a data asset."""
+    data_asset_id: str
     package_id: str
     package_version: str
+    title: str
+    description: Optional[str]
+    owner: str
     state: str
     latest_validation_run_id: Optional[str] = None
     active_deviation: bool = False
     created_at_utc: str
     last_updated_at_utc: str
+
+
+# Backward compatibility aliases (deprecated)
+CreateSubmissionRequest = CreateDataAssetRequest
+CreateSubmissionResponse = CreateDataAssetResponse
+GetSubmissionResponse = GetDataAssetResponse
 
 
 class ValidationCheck(BaseModel):
@@ -143,8 +208,8 @@ class ApprovalPreconditions(BaseModel):
     latest_validation_run_id: str
 
 
-class ApproveSubmissionRequest(BaseModel):
-    """Request to approve a submission."""
+class ApproveDataAssetRequest(BaseModel):
+    """Request to approve a data asset."""
     decision: Literal["publish", "reject"]
     required_preconditions: Optional[ApprovalPreconditions] = None
     signature: Optional[SignatureBlock] = None
@@ -153,13 +218,18 @@ class ApproveSubmissionRequest(BaseModel):
     password: Optional[str] = Field(None, description="Password for electronic signature verification (required when using password reauthentication)")
 
 
-class ApproveSubmissionResponse(BaseModel):
-    """Response from approving a submission."""
-    submission_id: str
+class ApproveDataAssetResponse(BaseModel):
+    """Response from approving a data asset."""
+    data_asset_id: str
     state: str
     published_version_id: Optional[str] = None
     published_at_utc: Optional[str] = None
     evidence_package_id: Optional[str] = None
+
+
+# Backward compatibility aliases (deprecated)
+ApproveSubmissionRequest = ApproveDataAssetRequest
+ApproveSubmissionResponse = ApproveDataAssetResponse
 
 
 class TriggerValidationRequest(BaseModel):

@@ -8,14 +8,17 @@ This application implements a GxP-compliant data product publishing system with:
 - Evidence package management
 - Quality gate validation
 - Approval workflow with state machine
+- Standardized data asset metadata (title, description, owner)
 
-Real-time WebSocket endpoints:
-- Connection: ws://host/ws/submissions/{submission_id}/status
-  Subscribe to real-time submission state updates
+Real-time WebSocket endpoints (planned):
+- Connection: ws://host/ws/data-assets/{data_asset_id}/status
+  Subscribe to real-time data asset state updates
 - Connection: ws://host/ws/validation/{validation_run_id}/progress
   Subscribe to real-time validation progress updates
 
 For WebSocket usage examples, see the /docs/websocket-usage endpoint.
+
+Terminology: 'data asset' (formerly 'submission') with standardized metadata fields.
 """
 from contextlib import asynccontextmanager
 import logging
@@ -38,10 +41,10 @@ logger = logging.getLogger("backend_api")
 #  - uvicorn api.main:app (pythonpath includes "src")
 #  - uvicorn src.api.main:app (imports as a package)
 try:
-    from .routers import drafts, submissions, validation, audit, evidence, auth, submissions_compat
+    from .routers import drafts, submissions, data_assets, validation, audit, evidence, auth, submissions_compat
     from ..database import init_db, seed_test_users, db_status
 except ImportError:  # pragma: no cover
-    from api.routers import drafts, submissions, validation, audit, evidence, auth, submissions_compat
+    from api.routers import drafts, submissions, data_assets, validation, audit, evidence, auth, submissions_compat
     from database import init_db, seed_test_users, db_status
 
 
@@ -87,11 +90,15 @@ openapi_tags = [
     },
     {
         "name": "drafts",
-        "description": "Draft data product package management. Allows publishers to create and manage draft packages before submission."
+        "description": "Draft data product package management. Allows publishers to create and manage draft packages before data asset creation."
+    },
+    {
+        "name": "data-assets",
+        "description": "Data asset workflow management with standardized metadata (title, description, owner). Includes creation, validation triggering, and approval/rejection. Enforces SoD and e-sign requirements."
     },
     {
         "name": "submissions",
-        "description": "Submission workflow management including creation, validation triggering, and approval/rejection. Enforces SoD and e-sign requirements."
+        "description": "DEPRECATED: Legacy submission endpoints for backward compatibility. Use data-assets endpoints instead. Submission workflow management including creation, validation triggering, and approval/rejection."
     },
     {
         "name": "validation",
@@ -129,7 +136,8 @@ app.add_middleware(
 # Register routers
 app.include_router(auth.router)
 app.include_router(drafts.router)
-app.include_router(submissions.router)
+app.include_router(data_assets.router)  # New standardized endpoints
+app.include_router(submissions.router)  # Backward compatibility
 app.include_router(validation.router)
 app.include_router(audit.router)
 app.include_router(evidence.router)
