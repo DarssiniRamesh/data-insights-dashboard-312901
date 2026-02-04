@@ -11,7 +11,7 @@ FR/NFR implementation summary (GxP traceability):
 DEPRECATED: This router provides backward compatibility for existing clients.
 New clients should use /api/v1/data-assets endpoints instead.
 
-All 'submission' terminology is deprecated in favor of 'data asset'.
+All 'submission' terminology is deprecated in favor of 'data asset' (deprecated, use data asset).
 """
 from typing import Any, Dict
 from fastapi import APIRouter, Depends, HTTPException, status, Request

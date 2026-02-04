@@ -98,7 +98,7 @@ openapi_tags = [
     },
     {
         "name": "submissions",
-        "description": "DEPRECATED: Legacy submission endpoints for backward compatibility. Use data-assets endpoints instead. Submission workflow management including creation, validation triggering, and approval/rejection."
+        "description": "DEPRECATED: Legacy submission endpoints for backward compatibility (deprecated, use data asset). Use data-assets endpoints instead. Submission workflow management including creation, validation triggering, and approval/rejection."
     },
     {
         "name": "validation",
@@ -212,45 +212,52 @@ def readiness_endpoint(request: Request):
 def websocket_usage_docs():
     """
     WebSocket usage documentation.
-    
+
     This endpoint provides documentation and examples for WebSocket connections.
-    
+
     Note: WebSocket endpoints are planned for future implementation to provide
-    real-time updates for submission state changes and validation progress.
-    
+    real-time updates for data asset state changes and validation progress.
+
     Planned WebSocket endpoints:
-    - ws://host/ws/submissions/{submission_id}/status
-    - ws://host/ws/validation/{validation_run_id}/progress
+    - ws://host/ws/data-assets/{data_asset_id}/status
+
+    Compatibility note:
+    - ws://host/ws/submissions/{submission_id}/status (deprecated, use data asset)
     """
     return {
         "websocket_endpoints": [
             {
+                "path": "ws://host/ws/data-assets/{data_asset_id}/status",
+                "description": "Subscribe to real-time data asset state updates",
+                "status": "planned",
+            },
+            {
                 "path": "ws://host/ws/submissions/{submission_id}/status",
-                "description": "Subscribe to real-time submission state updates",
-                "status": "planned"
+                "description": "Legacy alias (deprecated, use data asset)",
+                "status": "planned",
             },
             {
                 "path": "ws://host/ws/validation/{validation_run_id}/progress",
                 "description": "Subscribe to real-time validation progress updates",
-                "status": "planned"
-            }
+                "status": "planned",
+            },
         ],
         "usage_example": {
             "python": """
 import asyncio
 import websockets
 
-async def subscribe_to_submission():
-    uri = "ws://localhost:8000/ws/submissions/sub-123/status"
+async def subscribe_to_data_asset():
+    uri = "ws://localhost:8000/ws/data-assets/da-123/status"
     async with websockets.connect(uri) as websocket:
         while True:
             message = await websocket.recv()
             print(f"Status update: {message}")
 
-asyncio.run(subscribe_to_submission())
+asyncio.run(subscribe_to_data_asset())
             """,
             "javascript": """
-const ws = new WebSocket('ws://localhost:8000/ws/submissions/sub-123/status');
+const ws = new WebSocket('ws://localhost:8000/ws/data-assets/da-123/status');
 
 ws.onmessage = (event) => {
     const update = JSON.parse(event.data);
@@ -260,6 +267,6 @@ ws.onmessage = (event) => {
 ws.onerror = (error) => {
     console.error('WebSocket error:', error);
 };
-            """
-        }
+            """,
+        },
     }

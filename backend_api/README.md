@@ -15,7 +15,7 @@ This backend implements a comprehensive data product publishing system with:
 
 ## Terminology
 
-**Data Asset**: The standard term for what was previously called "submission". A data asset represents a versioned data product package with standardized metadata.
+**Data Asset**: The standard term for what was previously called "submission" (deprecated, use data asset). A data asset represents a versioned data product package with standardized metadata.
 
 **Metadata Fields** (standardized and constrained):
 - `title`: Required, 1-200 characters - The display name of the data asset
@@ -140,7 +140,7 @@ pytest --cov=src --cov-report=html
 
 ## Deprecation Policy
 
-**Submission endpoints** (`/api/v1/submissions/*`) are deprecated but supported for backward compatibility. All responses include deprecation headers:
+**Submission endpoints** (`/api/v1/submissions/*`) are deprecated (deprecated, use data asset) but supported for backward compatibility. All responses include deprecation headers:
 - `X-API-Deprecated: true`
 - `X-API-Deprecation-Message: Use /api/v1/data-assets endpoints instead`
 
