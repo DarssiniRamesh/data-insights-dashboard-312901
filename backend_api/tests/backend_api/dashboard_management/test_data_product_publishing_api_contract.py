@@ -1,3 +1,15 @@
+"""
+FR/NFR verification summary (GxP traceability):
+
+This test module provides automated verification evidence for selected functional requirements.
+
+- FR-DPP-001 (TEST): Verify creation endpoint returns 201 and a stable identifier.
+- NFR-DPP-020 (Automation): Contract-level automated tests intended for CI execution.
+
+Additional tests in this module cover security/SoD/e-sign expectations (primarily NFRs / other FRs),
+some marked xfail until the corresponding controls are fully implemented.
+"""
+
 import pytest
 
 
@@ -17,6 +29,7 @@ def _authn_todo(reason: str) -> str:
 @pytest.mark.api
 @pytest.mark.frd
 @pytest.mark.anyio
+# FR-DPP-001 (TEST): Verify API-based creation returns HTTP 201 and an identifier usable for downstream workflow steps.
 async def test_api_create_submission_returns_201(async_client, seed_submission_payload):
     """
     Feature: dashboard_management (workflow entrypoint surfaced in dashboard)

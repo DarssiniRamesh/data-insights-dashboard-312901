@@ -2,6 +2,12 @@
 PUBLIC_INTERFACE
 Data asset service for managing data assets and workflow states.
 
+FR/NFR implementation summary (GxP traceability):
+- FR-DPP-001: Create data asset with standardized metadata (title, description, owner) via create_data_asset().
+- FR-DPP-002: Retrieve data asset by ID via get_data_asset().
+- NFR-DPP-002 (Auditability): Emits audit trail events for create/state transitions via AuditService.record_event().
+- NFR-DPP-020 (Automation support): Provides deterministic test provisioning via ensure_minimal_data_asset_for_tests().
+
 Terminology: 'data asset' (formerly 'submission')
 Metadata fields: title, description, owner
 """
@@ -116,6 +122,8 @@ class DataAssetService:
         )
         self.db.commit()
 
+    # FR-DPP-001 (REQ): Create a data asset from a draft, persisting standardized metadata
+    # (title[1..200], description[<=2000 optional], owner[1..120]) and recording an attributable audit event.
     def create_data_asset(
         self,
         draft_id: str,
@@ -229,6 +237,8 @@ class DataAssetService:
             self.db.rollback()
             raise
 
+    # FR-DPP-002 (REQ): Retrieve a data asset (by ID) including metadata/state for UI display,
+    # downstream processing, and traceable workflow decisions.
     def get_data_asset(self, data_asset_id: str) -> Optional[Dict[str, Any]]:
         """
         PUBLIC_INTERFACE

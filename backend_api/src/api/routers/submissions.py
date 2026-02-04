@@ -2,6 +2,12 @@
 PUBLIC_INTERFACE
 Submissions router - backward compatibility wrapper for data assets.
 
+FR/NFR implementation summary (GxP traceability):
+- FR-DPP-001: POST /api/v1/submissions (deprecated) maps to data-asset creation behavior.
+- FR-DPP-002: GET /api/v1/submissions/{submission_id} (deprecated) maps to data-asset retrieval behavior.
+- NFR-DPP-009/NFR-DPP-010 (Identity/AuthZ): Endpoints require authentication via get_current_user dependency.
+- NFR-DPP-020 (Automation support): Maintains legacy contract behavior for existing tests/clients.
+
 DEPRECATED: This router provides backward compatibility for existing clients.
 New clients should use /api/v1/data-assets endpoints instead.
 
@@ -54,6 +60,8 @@ def add_deprecation_header(response: JSONResponse) -> JSONResponse:
     },
     deprecated=True,
 )
+# FR-DPP-001 (REQ): Create a data asset (legacy submission API) — this endpoint maps to the data-asset
+# creation flow and returns an identifier used for subsequent workflow steps.
 def create_submission(
     payload: Dict[str, Any],
     current_user: Dict[str, Any] = Depends(get_current_user),
@@ -107,6 +115,8 @@ def create_submission(
     },
     deprecated=True,
 )
+# FR-DPP-002 (REQ): Retrieve a data asset (legacy submission API) — returns current state and key fields
+# for dashboard display and traceable workflow actions.
 def get_submission(
     submission_id: str,
     current_user: Dict[str, Any] = Depends(get_current_user),

@@ -2,6 +2,12 @@
 PUBLIC_INTERFACE
 Data assets router for managing data asset lifecycle.
 
+FR/NFR implementation summary (GxP traceability):
+- FR-DPP-001: POST /api/v1/data-assets creates a data asset with standardized metadata.
+- FR-DPP-002: GET /api/v1/data-assets/{data_asset_id} retrieves a data asset for UI/workflow visibility.
+- NFR-DPP-009/NFR-DPP-010 (Identity/AuthZ): Endpoints require authentication via get_current_user dependency.
+- NFR-DPP-002 (Auditability): Endpoints accept audit_context and propagate correlation IDs for audit linking.
+
 Terminology: 'data asset' with standardized metadata (title, description, owner)
 """
 from typing import Any, Dict
@@ -44,6 +50,8 @@ router = APIRouter(prefix="/api/v1/data-assets", tags=["data-assets"])
         500: {"description": "Internal server error", "model": ErrorResponse},
     },
 )
+# FR-DPP-001 (REQ): Create a data asset via API using a draft_id plus standardized metadata
+# (title/description/owner). Enforces metadata constraints and links to an audit_context (client_request_id).
 def create_data_asset(
     request: CreateDataAssetRequest,
     current_user: Dict[str, Any] = Depends(get_current_user),
@@ -96,6 +104,8 @@ def create_data_asset(
         500: {"description": "Internal server error", "model": ErrorResponse},
     },
 )
+# FR-DPP-002 (REQ): Retrieve a data asset (by ID) including standardized metadata and current workflow state,
+# for dashboard display and downstream validation/approval decisions.
 def get_data_asset(
     data_asset_id: str,
     current_user: Dict[str, Any] = Depends(get_current_user),
