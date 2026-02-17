@@ -77,6 +77,7 @@ async def _create_draft(async_client) -> str:
 
 @pytest.mark.api
 @pytest.mark.anyio
+# TestCase: FR-DAT-001, FR-META-001 — Create data asset with valid standardized metadata; expect 201 + validating state.
 async def test_data_asset_creation_with_valid_metadata(async_client):
     """
     FR-DAT-001, FR-META-001
@@ -118,6 +119,7 @@ async def test_data_asset_creation_with_valid_metadata(async_client):
 
 @pytest.mark.api
 @pytest.mark.anyio
+# TestCase: FR-META-001 — Reject extra metadata fields (extra='forbid'); expect 422 validation error.
 async def test_data_asset_creation_rejects_extra_fields(async_client):
     """
     FR-META-001
@@ -162,6 +164,7 @@ async def test_data_asset_creation_rejects_extra_fields(async_client):
         ("a" * 201, 422),  # max_length=200
     ],
 )
+# TestCase: FR-META-001 — Enforce title length/trim constraints (1..200, non-blank); expect 201 or 422 accordingly.
 async def test_data_asset_creation_title_length_constraints(async_client, title: str, expected_status: int):
     """
     FR-META-001
@@ -207,6 +210,7 @@ async def test_data_asset_creation_title_length_constraints(async_client, title:
         ("u" * 121, 422),
     ],
 )
+# TestCase: FR-META-001 — Enforce owner required/length/trim constraints (1..120, non-blank); expect 201 or 422 accordingly.
 async def test_data_asset_creation_owner_required(async_client, owner, expected_status: int):
     """
     FR-META-001
@@ -249,6 +253,7 @@ async def test_data_asset_creation_owner_required(async_client, owner, expected_
         ("x" * 2001, 422, None),
     ],
 )
+# TestCase: FR-META-001 — Description optional and max length 2000; blank trimmed to null; expect 201 or 422 accordingly.
 async def test_data_asset_creation_description_optional(async_client, description: str | None, expected_status: int, expected_description):
     """
     FR-META-001
