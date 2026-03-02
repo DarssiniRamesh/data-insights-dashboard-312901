@@ -26,9 +26,16 @@ router = APIRouter(prefix="/api/v1/auth", tags=["auth"])
 
 
 class RegisterRequest(BaseModel):
+    """
+    Registration payload.
+
+    Notes:
+    - The frontend UI may send legacy role names (publisher/steward/governance_admin).
+      Those are normalized server-side to RBAC roles in AuthService.
+    """
     username: str = Field(..., min_length=3, max_length=50)
     password: str = Field(..., min_length=8)
-    roles: List[str]
+    roles: List[str] = Field(..., min_length=1)
 
 
 class RegisterResponse(BaseModel):

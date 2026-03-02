@@ -42,6 +42,31 @@ LEGACY_ROLE_MAP = {
 }
 
 
+def _normalize_roles_list(raw_roles: List[str]) -> List[str]:
+    """
+    Normalize a list of roles from legacy naming (UI/tests) into current RBAC roles.
+
+    - Maps legacy roles (publisher/steward/governance_admin) into RBAC roles.
+    - Deduplicates while preserving order.
+    - Ignores empty/whitespace role entries.
+    """
+    normalized: List[str] = []
+    seen = set()
+
+    for r in raw_roles or []:
+        if not r:
+            continue
+        rr = str(r).strip()
+        if not rr:
+            continue
+        mapped = LEGACY_ROLE_MAP.get(rr, rr)
+        if mapped not in seen:
+            normalized.append(mapped)
+            seen.add(mapped)
+
+    return normalized
+
+
 # PUBLIC_INTERFACE
 def set_registration_enabled(enabled: bool) -> None:
     """Set runtime registration enablement flag."""
@@ -239,7 +264,15 @@ class AuthService:
 
     # PUBLIC_INTERFACE
     def create_user(self, username: str, password: str, roles: List[str]) -> Dict[str, Any]:
-        """Create a new user."""
+        """Create a new user.
+
+        Accepts both RBAC roles and legacy role names, normalizing them to RBAC roles.
+        """
+        roles = _normalize_roles_list(roles)
+
+        if not roles:
+            raise ValueError("At least one role must be provided")
+
         for role in roles:
             if role not in VALID_ROLES:
                 raise ValueError(f"Invalid role: {role}. Must be one of {VALID_ROLES}")
