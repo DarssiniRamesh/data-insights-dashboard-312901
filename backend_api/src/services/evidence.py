@@ -5,7 +5,7 @@ Evidence service for creating and managing evidence packages.
 FR-EVD-001: Evidence package generation
 FR-EVD-002: Tamper-evident storage with integrity verification
 """
-from typing import Dict, Any, Optional, List
+from typing import Dict, Any, Optional
 import json
 import hashlib
 
@@ -200,7 +200,6 @@ class EvidenceService:
 
     def _store_manifest(self, storage_ref: str, content: str) -> None:
         """Store evidence manifest to file system."""
-        import os
         from pathlib import Path
 
         # Resolve path relative to backend_api root
@@ -242,8 +241,6 @@ class EvidenceService:
 
         if not manifest_row:
             raise ValueError(f"Manifest artifact not found: {evidence_package['manifest_artifact_id']}")
-
-        manifest_artifact = dict(manifest_row)
 
         # Verify manifest integrity (hash check)
         # In production, this would read and verify the actual file

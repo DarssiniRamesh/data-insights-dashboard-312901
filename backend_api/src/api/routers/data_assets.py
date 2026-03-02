@@ -12,13 +12,12 @@ Terminology: 'data asset' with standardized metadata (title, description, owner)
 """
 from typing import Any, Dict
 from fastapi import APIRouter, Depends, HTTPException, status
-from fastapi.responses import JSONResponse
 
 from database import get_connection
 from services.data_asset import DataAssetService
 from services.validation import ValidationService
 from services.approval import ApprovalService, SoDViolationException, SignatureVerificationException
-from services.auth import AuthService, get_current_user
+from services.auth import get_current_user
 from schemas import (
     CreateDataAssetRequest,
     CreateDataAssetResponse,

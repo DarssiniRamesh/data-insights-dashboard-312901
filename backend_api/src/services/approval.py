@@ -8,7 +8,6 @@ FR-APP-003: Evidence package generation on approval
 """
 from typing import Dict, Any, Optional
 import json
-import hashlib
 
 from utils import generate_id, utc_now_iso
 from services.audit import AuditService

@@ -222,7 +222,6 @@ class ValidationService:
 
         FR-VAL-002: Implements tamper-evident storage for validation evidence.
         """
-        import os
         from pathlib import Path
 
         # Resolve path relative to backend_api root
