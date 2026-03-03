@@ -384,17 +384,22 @@ def readiness_endpoint(request: Request):
     """
     Readiness endpoint (DB-dependent).
 
-    This is intended for environments that want a stronger signal than /health.
-    It checks whether:
-      - a DB connection can be established and a trivial query succeeds, AND
-      - the app successfully ran schema init during lifespan startup.
+    NOTE:
+    Some deployment proxies treat readiness specially and may surface 502 if the configured
+    readiness path is missing or errors. This handler must therefore be exceptionally
+    defensive and never raise unhandled exceptions.
 
     Returns:
       - 200 when DB is reachable and initialized
-      - 503 when DB is not ready
+      - 503 when DB is not ready (but the server itself is alive)
     """
-    ok, path, degraded = db_status()
-    initialized = bool(getattr(request.app.state, "db_initialized", False))
+    try:
+        ok, path, degraded = db_status()
+        initialized = bool(getattr(request.app.state, "db_initialized", False))
+    except Exception:
+        logger.exception("Readiness check failed unexpectedly.")
+        # Keep shape stable and do not throw; report "not_ready" instead of crashing.
+        ok, path, degraded, initialized = False, None, True, False
 
     if ok and initialized:
         return {
@@ -409,6 +414,46 @@ def readiness_endpoint(request: Request):
             "db": {"ok": bool(ok), "path": path, "degraded": degraded, "initialized": initialized},
         },
     )
+
+
+# PUBLIC_INTERFACE
+@app.get(
+    "/readyz",
+    tags=["health"],
+    summary="Readiness Alias",
+    description="Alias for /ready used by some proxies/platform health checks.",
+    operation_id="readiness_alias_readyz",
+)
+def readiness_alias_readyz(request: Request):
+    """
+    Readiness alias endpoint.
+
+    Many platforms default to /readyz. If that path is missing they may return a proxy 502,
+    which then appears as CORS-blocked to the browser. Keep this endpoint present and
+    delegate to the main readiness check.
+    """
+    return readiness_endpoint(request)
+
+
+# PUBLIC_INTERFACE
+@app.get(
+    os.getenv("HEALTHCHECK_PATH", "/healthz"),
+    tags=["health"],
+    summary="Configured Healthcheck Path",
+    description="Always-200 liveness endpoint at a configurable path for reverse proxies.",
+    operation_id="configured_healthcheck_path",
+)
+def configured_healthcheck_path():
+    """
+    Configurable liveness endpoint (always returns 200).
+
+    Environment variable:
+      - HEALTHCHECK_PATH (default: /healthz)
+
+    This exists primarily to satisfy platform/proxy health checks that are configured
+    externally. Keeping it DB-independent prevents proxy 502 during DB startup.
+    """
+    return {"status": "ok"}
 
 
 @app.get("/docs/websocket-usage", tags=["documentation"])

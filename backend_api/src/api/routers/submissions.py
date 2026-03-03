@@ -123,6 +123,11 @@ def get_submission(
     """
     PUBLIC_INTERFACE
     Get a submission by ID (maps to data asset).
+
+    Contract goals:
+      - 404 when not found
+      - 200 with best-effort fields when found (even if validation info is unavailable)
+      - never raise unexpected exceptions that bubble into unhelpful 500s
     """
     try:
         conn = get_connection()
@@ -133,17 +138,19 @@ def get_submission(
         if not data_asset:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Submission not found")
 
-        # Get latest validation run if any
-        latest_validation = validation_service.get_latest_validation_for_data_asset(submission_id)
+        latest_validation = None
+        try:
+            # Validation lookup should not be allowed to break submission retrieval.
+            latest_validation = validation_service.get_latest_validation_for_data_asset(submission_id)
+        except Exception:
+            latest_validation = None
 
-        # Defensive access: some older DB rows (or partial test fixtures) may not include
-        # the timestamp fields; raising KeyError here causes a 500 and breaks the dashboard.
         response_data = {
-            "submission_id": data_asset.get("data_asset_id"),
+            "submission_id": data_asset.get("data_asset_id") or submission_id,
             "package_id": data_asset.get("package_id"),
             "package_version": data_asset.get("package_version"),
-            "state": data_asset.get("state"),
-            "latest_validation_run_id": latest_validation.get("validation_run_id") if latest_validation else None,
+            "state": data_asset.get("state") or "unknown",
+            "latest_validation_run_id": (latest_validation or {}).get("validation_run_id"),
             "active_deviation": bool(data_asset.get("active_deviation_id")),
             "created_at_utc": data_asset.get("created_at_utc") or data_asset.get("created_at"),
             "last_updated_at_utc": data_asset.get("last_updated_at_utc") or data_asset.get("updated_at_utc"),
@@ -154,8 +161,9 @@ def get_submission(
 
     except HTTPException:
         raise
-    except Exception as e:
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
+    except Exception:
+        # Avoid leaking internal exception text; global exception handler will log.
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Internal Server Error")
 
 
 # PUBLIC_INTERFACE
