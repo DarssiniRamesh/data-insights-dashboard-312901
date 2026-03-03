@@ -220,12 +220,16 @@ async def ensure_cors_headers(request: Request, call_next):
     """
     origin = request.headers.get("origin")
 
-    # Always satisfy browser preflight; CORSMiddleware also supports this, but this ensures
-    # we never fail preflight due to routing/method edge-cases.
-    if request.method.upper() == "OPTIONS":
-        resp = Response(status_code=status.HTTP_200_OK)
-    else:
-        resp = await call_next(request)
+    # IMPORTANT:
+    # Do NOT short-circuit OPTIONS here.
+    #
+    # Reason: CORSMiddleware must see the OPTIONS request to generate a proper
+    # preflight response, including:
+    #   - Access-Control-Allow-Headers (e.g., Content-Type)
+    #   - Access-Control-Allow-Methods
+    # If we return a bare 200 early, browsers will reject the preflight when they
+    # request Content-Type (or Authorization) headers.
+    resp = await call_next(request)
 
     if not origin:
         return resp
