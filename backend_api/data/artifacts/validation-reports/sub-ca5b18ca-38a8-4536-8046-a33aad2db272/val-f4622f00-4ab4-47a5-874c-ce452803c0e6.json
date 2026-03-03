@@ -1,0 +1,34 @@
+{
+  "validation_run_id": "val-f4622f00-4ab4-47a5-874c-ce452803c0e6",
+  "data_asset_id": "sub-ca5b18ca-38a8-4536-8046-a33aad2db272",
+  "profile": "baseline",
+  "overall_status": "pass",
+  "checks": [
+    {
+      "check_name": "metadata_completeness",
+      "status": "pass",
+      "metrics": {
+        "has_title": true,
+        "has_owner": true
+      },
+      "findings": []
+    },
+    {
+      "check_name": "state_validity",
+      "status": "pass",
+      "metrics": {
+        "current_state": "validating"
+      },
+      "findings": []
+    },
+    {
+      "check_name": "schema_validation",
+      "status": "pass",
+      "metrics": {
+        "rows_validated": 0
+      },
+      "findings": []
+    }
+  ],
+  "created_at_utc": "2026-03-03T06:23:53.168549Z"
+}
