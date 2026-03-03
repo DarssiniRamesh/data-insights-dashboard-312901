@@ -162,12 +162,19 @@ allowed_origins = [*default_allowed_origins, *extra_allowed_origins]
 # This ensures preflight (OPTIONS) for endpoints like /api/v1/auth/login returns
 # Access-Control-Allow-Origin for the current preview host.
 _default_kavia_preview_origin_regex = (
-    r"^https://vscode-internal-[a-zA-Z0-9-]+\.beta01\.cloud\.kavia\.ai(:\d+)?$"
+    r"^https?://vscode-internal-[a-zA-Z0-9-]+\.beta01\.cloud\.kavia\.ai(:\d+)?$"
 )
 kavia_preview_origin_regex = os.getenv(
     "BACKEND_CORS_ALLOW_ORIGIN_REGEX",
     _default_kavia_preview_origin_regex,
 ).strip()
+
+# If the environment can provide the exact preview origin, add it explicitly to
+# allow_origins. This avoids edge-case mismatches in origin parsing/normalization
+# through proxies and guarantees CORSMiddleware will echo it on preflight.
+preview_origin = os.getenv("BACKEND_CORS_PREVIEW_ORIGIN", "").strip()
+if preview_origin:
+    allowed_origins = [*allowed_origins, preview_origin]
 
 # Only allow credentials when we are NOT using wildcard origins.
 # (We currently do not use wildcard, but this protects future edits.)
