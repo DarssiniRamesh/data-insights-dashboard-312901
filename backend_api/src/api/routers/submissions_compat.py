@@ -133,6 +133,60 @@ def ensure_submission_exists_for_tests(db, submission_id: str) -> None:
     db.commit()
 
 
+# PUBLIC_INTERFACE
+@router.get("/submissions")
+async def list_submissions_compat(
+    credentials: Optional[HTTPAuthorizationCredentials] = Security(security),
+):
+    """
+    PUBLIC_INTERFACE
+    Compatibility endpoint for listing submissions at the legacy non-/api path.
+
+    Why this exists:
+      - The frontend preview calls GET https://<host>:3001/submissions
+      - Our primary REST API is namespaced under /api/v1, but this legacy path is used
+        by older clients and some UI code.
+      - Returning a real JSON response ensures CORS middleware can attach
+        Access-Control-Allow-Origin (and avoids confusing proxy-generated errors).
+
+    Returns:
+      - 200 with a lightweight list of recent submissions/data-assets.
+    """
+    db = get_connection()
+
+    # Auth is optional here (compat); if token exists, validate it so callers get a
+    # meaningful 401 instead of silently succeeding with a bad token.
+    if credentials:
+        AuthService(db).get_current_user(credentials)
+
+    cursor = db.execute(
+        """
+        SELECT data_asset_id, package_id, package_version, state, created_at_utc, last_updated_at_utc
+        FROM data_assets
+        ORDER BY created_at_utc DESC
+        LIMIT 50
+        """
+    )
+    rows = cursor.fetchall() or []
+
+    items = []
+    for r in rows:
+        # sqlite3.Row supports dict(...) conversion
+        d = dict(r)
+        items.append(
+            {
+                "submission_id": d.get("data_asset_id"),
+                "package_id": d.get("package_id"),
+                "package_version": d.get("package_version"),
+                "state": d.get("state"),
+                "created_at_utc": d.get("created_at_utc"),
+                "last_updated_at_utc": d.get("last_updated_at_utc"),
+            }
+        )
+
+    return {"items": items}
+
+
 @router.post("/submissions", status_code=201)
 async def create_submission_compat(
     payload: SimplifiedSubmissionPayload,
