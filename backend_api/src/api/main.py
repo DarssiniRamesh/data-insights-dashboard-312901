@@ -311,7 +311,7 @@ import asyncio
 import websockets
 
 async def subscribe_to_data_asset():
-    uri = "ws://localhost:8000/ws/data-assets/da-123/status"
+    uri = "ws://localhost:3001/ws/data-assets/da-123/status"
     async with websockets.connect(uri) as websocket:
         while True:
             message = await websocket.recv()
@@ -320,7 +320,7 @@ async def subscribe_to_data_asset():
 asyncio.run(subscribe_to_data_asset())
             """,
             "javascript": """
-const ws = new WebSocket('ws://localhost:8000/ws/data-assets/da-123/status');
+const ws = new WebSocket('ws://localhost:3001/ws/data-assets/da-123/status');
 
 ws.onmessage = (event) => {
     const update = JSON.parse(event.data);
@@ -333,3 +333,33 @@ ws.onerror = (error) => {
             """,
         },
     }
+
+
+# PUBLIC_INTERFACE
+def run() -> None:
+    """Run the FastAPI app with Uvicorn using HOST/PORT environment variables.
+
+    This is a convenience entrypoint for environments that launch via
+    `python -m src.api.main` instead of `uvicorn ...`.
+
+    Environment variables:
+      - HOST (default: 0.0.0.0)
+      - PORT (default: 3001)
+      - UVICORN_WORKERS (default: 1)
+      - LOG_LEVEL (default: INFO)
+
+    Returns:
+      None
+    """
+    import uvicorn
+
+    host = os.getenv("HOST", os.getenv("UVICORN_HOST", "0.0.0.0"))
+    port = int(os.getenv("PORT", "3001"))
+    workers = int(os.getenv("UVICORN_WORKERS", "1"))
+    log_level = os.getenv("LOG_LEVEL", "info").lower()
+
+    uvicorn.run("src.api.main:app", host=host, port=port, workers=workers, log_level=log_level)
+
+
+if __name__ == "__main__":  # pragma: no cover
+    run()
