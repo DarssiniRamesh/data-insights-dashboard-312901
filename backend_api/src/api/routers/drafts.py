@@ -5,7 +5,7 @@ Drafts router for data product draft management.
 from fastapi import APIRouter, HTTPException, Security
 from fastapi.security import HTTPAuthorizationCredentials
 
-from database import get_connection
+from ...database import get_connection
 from schemas import CreateDraftRequest, CreateDraftResponse, ErrorResponse
 from services.draft import DraftService
 from services.auth import AuthService, security

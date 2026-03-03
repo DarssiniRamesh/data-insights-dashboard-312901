@@ -17,7 +17,7 @@ from typing import Any, Dict
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import JSONResponse
 
-from database import get_connection
+from ...database import get_connection
 from services.data_asset import DataAssetService
 from services.validation import ValidationService
 from services.approval import ApprovalService, SoDViolationException, SignatureVerificationException

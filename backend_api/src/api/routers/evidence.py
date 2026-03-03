@@ -5,7 +5,7 @@ Evidence router for evidence package retrieval and verification.
 from fastapi import APIRouter, HTTPException, Security
 from fastapi.security import HTTPAuthorizationCredentials
 
-from database import get_connection
+from ...database import get_connection
 from schemas import EvidencePackageResponse, EvidenceArtifact, ErrorResponse
 from services.evidence import EvidenceService, EvidenceError
 from services.auth import AuthService, security

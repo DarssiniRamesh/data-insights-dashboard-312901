@@ -5,7 +5,7 @@ Validation router for validation report retrieval.
 from fastapi import APIRouter, HTTPException, Security
 from fastapi.security import HTTPAuthorizationCredentials
 
-from database import get_connection
+from ...database import get_connection
 from schemas import ValidationReportSummary, ErrorResponse
 from services.validation import ValidationService
 from services.auth import AuthService, security

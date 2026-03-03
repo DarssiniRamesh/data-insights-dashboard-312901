@@ -12,14 +12,14 @@ from fastapi import APIRouter, HTTPException, Depends
 from typing import List
 from pydantic import BaseModel, Field
 
-from database import get_connection
-from services.auth import (
+from ...database import get_connection
+from ...services.auth import (
     AuthService,
     get_current_user_dep,
     is_registration_enabled,
     set_registration_enabled,
 )
-from utils import make_error_response, generate_id
+from ...utils import make_error_response, generate_id
 
 
 router = APIRouter(prefix="/api/v1/auth", tags=["auth"])

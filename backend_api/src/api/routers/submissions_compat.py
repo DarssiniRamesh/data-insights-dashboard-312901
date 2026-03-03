@@ -14,7 +14,7 @@ from typing import Optional, Dict, Any, List
 from pydantic import BaseModel, model_validator
 import sqlite3
 
-from database import get_connection
+from ...database import get_connection
 from services.auth import AuthService, security
 from services.draft import DraftService
 from services.data_asset import DataAssetService

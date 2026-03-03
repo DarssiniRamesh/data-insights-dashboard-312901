@@ -5,7 +5,7 @@ Audit router for audit event queries.
 from fastapi import APIRouter, HTTPException, Security, Query
 from typing import Optional
 
-from database import get_connection
+from ...database import get_connection
 from schemas import GetAuditEventsResponse, AuditEvent, ErrorResponse
 from services.audit import AuditService
 from services.auth import require_roles

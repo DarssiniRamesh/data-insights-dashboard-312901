@@ -396,7 +396,7 @@ class AuthService:
 # PUBLIC_INTERFACE
 def get_current_user_dep(credentials: HTTPAuthorizationCredentials = Security(security)):
     """FastAPI dependency to get current authenticated user."""
-    from database import get_connection
+    from ..database import get_connection
 
     db = get_connection()
     return AuthService(db).get_current_user(credentials)
