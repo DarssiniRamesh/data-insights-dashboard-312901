@@ -19,6 +19,7 @@ logger = logging.getLogger("backend_api.db")
 _connection: Optional[sqlite3.Connection] = None
 _db_degraded_mode: bool = False
 _db_effective_path: Optional[str] = None
+_db_initialized: bool = False
 
 
 def _default_db_path() -> str:
@@ -169,10 +170,19 @@ def get_connection() -> sqlite3.Connection:
     """
     Get or create SQLite connection with foreign keys enabled.
 
-    If the configured DB path is invalid/unwritable, falls back to an in-memory DB
-    (degraded mode) so the API can still boot and serve /health.
+    Contract:
+      - Returns: a SQLite connection with row_factory configured.
+      - Side effects: may create DB file/dirs; will initialize schema once per process.
+      - Errors: never raises due to DB path issues; will fallback to /tmp or in-memory.
+
+    Why this exists:
+      Preview/runtime environments can have differing working directories and FS
+      permissions. If we silently fall back to a different DB (e.g. /tmp or :memory:)
+      without initializing schema/users, authentication will consistently return 401
+      due to "user not found". We therefore ensure schema + baseline seed users are
+      present for *any* opened connection.
     """
-    global _connection, _db_degraded_mode, _db_effective_path
+    global _connection, _db_degraded_mode, _db_effective_path, _db_initialized
 
     if _connection is not None:
         return _connection
@@ -185,28 +195,39 @@ def get_connection() -> sqlite3.Connection:
         _connection = _connect_sqlite(primary_path)
         _db_effective_path = primary_path
         _db_degraded_mode = False
-        return _connection
     except Exception:
         logger.exception("Failed opening SQLite DB at path=%s", primary_path)
 
     # Second attempt: writable /tmp location (still persistent within container FS)
-    fallback_path: Optional[str] = None
-    try:
-        fallback_path = _fallback_db_path()
-        _ensure_parent_dir(fallback_path)
-        _connection = _connect_sqlite(fallback_path)
-        _db_effective_path = fallback_path
-        _db_degraded_mode = True
-        logger.warning("DB running in degraded mode using fallback path=%s", fallback_path)
-        return _connection
-    except Exception:
-        logger.exception("Failed opening SQLite DB fallback path=%s", fallback_path)
+    if _connection is None:
+        fallback_path: Optional[str] = None
+        try:
+            fallback_path = _fallback_db_path()
+            _ensure_parent_dir(fallback_path)
+            _connection = _connect_sqlite(fallback_path)
+            _db_effective_path = fallback_path
+            _db_degraded_mode = True
+            logger.warning("DB running in degraded mode using fallback path=%s", fallback_path)
+        except Exception:
+            logger.exception("Failed opening SQLite DB fallback path=%s", fallback_path)
 
     # Final attempt: in-memory
-    _connection = _connect_sqlite(":memory:")
-    _db_effective_path = ":memory:"
-    _db_degraded_mode = True
-    logger.warning("DB running in degraded mode using in-memory SQLite.")
+    if _connection is None:
+        _connection = _connect_sqlite(":memory:")
+        _db_effective_path = ":memory:"
+        _db_degraded_mode = True
+        logger.warning("DB running in degraded mode using in-memory SQLite.")
+
+    # Initialize schema exactly once per process (idempotent but keep it explicit)
+    if not _db_initialized:
+        try:
+            init_db()
+            _db_initialized = True
+            logger.info("DB initialized (path=%s degraded=%s)", _db_effective_path, _db_degraded_mode)
+        except Exception:
+            # Do not crash startup; API can still serve health/readiness.
+            logger.exception("Non-fatal: DB initialization failed (path=%s).", _db_effective_path)
+
     return _connection
 
 
@@ -237,7 +258,14 @@ def db_status() -> Tuple[bool, str, bool]:
 
 # PUBLIC_INTERFACE
 def init_db() -> None:
-    """Initialize database schema."""
+    """Initialize database schema.
+
+    Notes:
+      - This function is idempotent and safe to call multiple times.
+      - It ensures baseline users exist so that login can succeed in preview/dev
+        environments even if the DB file had to be created (e.g., after falling
+        back to /tmp or :memory:).
+    """
     conn = get_connection()
 
     # Users table with authentication fields
@@ -273,6 +301,14 @@ def init_db() -> None:
 
     # Ensure deterministic system user exists before any audit events can be written.
     _ensure_system_user(conn)
+
+    # Seed baseline dev/test users (idempotent; skips if already present).
+    # This prevents confusing persistent 401s in environments where the DB had to
+    # be created or was empty.
+    try:
+        seed_test_users()
+    except Exception:
+        logger.exception("Non-fatal: failed seeding baseline users.")
 
     # Drafts table
     conn.execute(
