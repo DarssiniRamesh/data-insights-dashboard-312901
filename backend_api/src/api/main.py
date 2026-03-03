@@ -27,6 +27,7 @@ import os
 from fastapi import FastAPI, Request, Response, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from fastapi.exceptions import HTTPException as FastAPIHTTPException
 
 # Ensure we emit useful startup diagnostics in preview/CI even if no logging is configured.
 if not logging.getLogger().handlers:
@@ -215,20 +216,11 @@ async def ensure_cors_headers(request: Request, call_next):
         the CORSMiddleware configuration.
 
     Behavior:
-      - If request.method == OPTIONS: return 200 immediately (preflight success).
-      - Otherwise: call downstream handlers, then add ACAO if missing and origin is allowed.
+      - Do NOT short-circuit OPTIONS (CORSMiddleware should handle preflight).
+      - Call downstream handlers, then add ACAO if missing and origin is allowed.
     """
     origin = request.headers.get("origin")
 
-    # IMPORTANT:
-    # Do NOT short-circuit OPTIONS here.
-    #
-    # Reason: CORSMiddleware must see the OPTIONS request to generate a proper
-    # preflight response, including:
-    #   - Access-Control-Allow-Headers (e.g., Content-Type)
-    #   - Access-Control-Allow-Methods
-    # If we return a bare 200 early, browsers will reject the preflight when they
-    # request Content-Type (or Authorization) headers.
     resp = await call_next(request)
 
     if not origin:
@@ -256,6 +248,62 @@ async def ensure_cors_headers(request: Request, call_next):
             resp.headers["Access-Control-Allow-Credentials"] = "true"
 
     return resp
+
+
+def _apply_cors_headers_if_allowed(request: Request, response: Response) -> Response:
+    """
+    Apply CORS response headers if request Origin is allowed and headers are not already set.
+
+    Note: This is used by exception handlers because FastAPI can generate error responses
+    outside the normal middleware response path, which may omit ACAO and break the frontend.
+    """
+    origin = request.headers.get("origin")
+    if not origin:
+        return response
+
+    if "access-control-allow-origin" in (k.lower() for k in response.headers.keys()):
+        return response
+
+    origin_allowed = origin in allowed_origins
+    if not origin_allowed:
+        import re
+
+        try:
+            origin_allowed = bool(re.match(kavia_preview_origin_regex, origin))
+        except re.error:
+            origin_allowed = False
+
+    if origin_allowed:
+        response.headers["Access-Control-Allow-Origin"] = origin
+        response.headers["Vary"] = "Origin"
+        if allow_credentials:
+            response.headers["Access-Control-Allow-Credentials"] = "true"
+
+    return response
+
+
+@app.exception_handler(FastAPIHTTPException)
+async def http_exception_handler(request: Request, exc: FastAPIHTTPException):
+    """
+    Ensure HTTPException responses include CORS headers when Origin is allowed.
+
+    This prevents the browser from hiding useful error details and blocking the dashboard
+    when an endpoint returns 4xx (or explicitly raised 5xx) responses.
+    """
+    response = JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})
+    return _apply_cors_headers_if_allowed(request, response)
+
+
+@app.exception_handler(Exception)
+async def unhandled_exception_handler(request: Request, exc: Exception):
+    """
+    Ensure unhandled 500 responses include CORS headers when Origin is allowed.
+
+    We intentionally do not leak exception details to clients.
+    """
+    logger.exception("Unhandled exception: %s", exc)
+    response = JSONResponse(status_code=500, content={"detail": "Internal Server Error"})
+    return _apply_cors_headers_if_allowed(request, response)
 
 
 # Register routers

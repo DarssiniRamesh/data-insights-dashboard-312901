@@ -136,15 +136,17 @@ def get_submission(
         # Get latest validation run if any
         latest_validation = validation_service.get_latest_validation_for_data_asset(submission_id)
 
+        # Defensive access: some older DB rows (or partial test fixtures) may not include
+        # the timestamp fields; raising KeyError here causes a 500 and breaks the dashboard.
         response_data = {
-            "submission_id": data_asset["data_asset_id"],
-            "package_id": data_asset["package_id"],
-            "package_version": data_asset["package_version"],
-            "state": data_asset["state"],
+            "submission_id": data_asset.get("data_asset_id"),
+            "package_id": data_asset.get("package_id"),
+            "package_version": data_asset.get("package_version"),
+            "state": data_asset.get("state"),
             "latest_validation_run_id": latest_validation.get("validation_run_id") if latest_validation else None,
             "active_deviation": bool(data_asset.get("active_deviation_id")),
-            "created_at_utc": data_asset["created_at_utc"],
-            "last_updated_at_utc": data_asset["last_updated_at_utc"],
+            "created_at_utc": data_asset.get("created_at_utc") or data_asset.get("created_at"),
+            "last_updated_at_utc": data_asset.get("last_updated_at_utc") or data_asset.get("updated_at_utc"),
         }
 
         response = JSONResponse(content=response_data)
