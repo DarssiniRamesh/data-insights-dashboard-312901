@@ -57,21 +57,32 @@ def _ensure_system_user(conn: sqlite3.Connection) -> None:
     """
     Ensure a deterministic 'system' user exists.
 
-    This user is required because audit_events.actor_user_id has a foreign key
-    constraint to users(user_id), and several services/compat endpoints emit
-    system-initiated audit events with actor_user_id='system'.
+    Contract:
+      - Must be safe to call during DB bootstrap (before FastAPI app import).
+      - Must not import FastAPI or other framework modules.
+      - Must be idempotent and commit immediately (audit FK safety).
 
-    The function is idempotent and commits immediately so subsequent audit writes
-    won't fail with FK violations.
+    Why:
+      Several services emit audit events as actor_user_id='system'. The audit_events
+      table has a foreign key to users(user_id), so this user must exist.
 
-    Important: This function must not crash if called before the `users` table exists.
+    Important:
+      This function must not crash if called before the `users` table exists.
     """
-    # Import locally to avoid import cycles at module import time.
-    # Support both import roots: services.auth (pythonpath=src) and src.services.auth (package import)
-    try:
-        from services.auth import AuthService
-    except ImportError:  # pragma: no cover
-        from ..services.auth import AuthService
+    import os
+    import hashlib
+    import hmac
+
+    def _hash_password_pbkdf2(password: str, salt: bytes) -> str:
+        """
+        PBKDF2-HMAC-SHA256 hash compatible with AuthService.hash_password.
+
+        Note: We intentionally duplicate the tiny hashing logic here to keep the DB
+        module independent of FastAPI/service-layer imports during bootstrap.
+        """
+        iterations = 100000
+        pwd_hash = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt, iterations)
+        return pwd_hash.hex()
 
     try:
         cursor = conn.execute(
@@ -80,24 +91,24 @@ def _ensure_system_user(conn: sqlite3.Connection) -> None:
         )
         cols = {r[1] for r in conn.execute("PRAGMA table_info(users);").fetchall()}
     except sqlite3.OperationalError:
-        # users table not created yet. init_db() will call us again after table creation.
         logger.warning("Cannot ensure system user because users table does not exist yet.")
         return
 
-    # If critical auth columns are missing in an older schema, skip instead of crashing.
     required_cols = {"user_id", "username", "password_hash", "password_salt", "roles", "is_active", "created_at"}
     if not required_cols.issubset(cols):
-        logger.warning("users table missing required columns (%s); cannot ensure system user safely.", sorted(required_cols - cols))
+        logger.warning(
+            "users table missing required columns (%s); cannot ensure system user safely.",
+            sorted(required_cols - cols),
+        )
         return
 
     row = cursor.fetchone()
 
-    desired_roles = "system,admin"  # includes 'admin' per requirements; 'system' is informational for DB only
+    desired_roles = "system,admin"
     desired_primary_role = "admin"
     created_at = datetime.now(UTC).isoformat().replace("+00:00", "Z")
 
     if row:
-        # Best-effort normalization to ensure it's active and has admin.
         roles = (row["roles"] or "").split(",") if row["roles"] else []
         if "admin" not in roles:
             roles.append("admin")
@@ -105,11 +116,7 @@ def _ensure_system_user(conn: sqlite3.Connection) -> None:
             roles.append("system")
         roles_str = ",".join([r for r in roles if r])
 
-        updates = {
-            "username": "system",
-            "roles": roles_str,
-            "is_active": 1,
-        }
+        updates = {"username": "system", "roles": roles_str, "is_active": 1}
         if "role" in cols:
             updates["role"] = desired_primary_role
         if "display_name" in cols:
@@ -121,11 +128,12 @@ def _ensure_system_user(conn: sqlite3.Connection) -> None:
         return
 
     # Create required password fields; password isn't used for system actions but schema requires it.
-    auth = AuthService(conn)
-    pwd_hash, salt = auth.hash_password("Passw0rd!")
+    salt = os.urandom(32)
+    pwd_hash = _hash_password_pbkdf2("Passw0rd!", salt)
+    salt_hex = salt.hex()
 
     insert_cols = ["user_id", "username", "password_hash", "password_salt", "roles", "is_active", "created_at"]
-    insert_vals = ["system", "system", pwd_hash, salt, desired_roles, True, created_at]
+    insert_vals = ["system", "system", pwd_hash, salt_hex, desired_roles, True, created_at]
 
     if "display_name" in cols:
         insert_cols.append("display_name")
@@ -135,10 +143,7 @@ def _ensure_system_user(conn: sqlite3.Connection) -> None:
         insert_vals.append(desired_primary_role)
 
     placeholders = ",".join(["?"] * len(insert_cols))
-    conn.execute(
-        f"INSERT INTO users({','.join(insert_cols)}) VALUES({placeholders})",
-        insert_vals,
-    )
+    conn.execute(f"INSERT INTO users({','.join(insert_cols)}) VALUES({placeholders})", insert_vals)
     conn.commit()
 
 

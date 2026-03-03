@@ -8,7 +8,7 @@ modifying test code while maintaining the proper internal implementation.
 
 Note: Uses 'data asset' terminology internally but maintains 'submission' API surface for compatibility.
 """
-from fastapi import APIRouter, HTTPException, Security
+from fastapi import APIRouter, HTTPException, Response, Security, status
 from fastapi.security import HTTPAuthorizationCredentials
 from typing import Optional, Dict, Any, List
 from pydantic import BaseModel, model_validator
@@ -21,6 +21,29 @@ from services.data_asset import DataAssetService
 from utils import make_error_response, generate_id, utc_now_iso
 
 router = APIRouter(tags=["submissions"])
+
+
+# PUBLIC_INTERFACE
+@router.options(
+    "/submissions",
+    summary="CORS preflight for legacy /submissions",
+    description="Explicit preflight handler to ensure proxies and browsers receive a 200 for OPTIONS /submissions.",
+    operation_id="submissions_compat_preflight",
+)
+def submissions_compat_preflight() -> Response:
+    """
+    PUBLIC_INTERFACE
+    Handle CORS preflight for the legacy /submissions endpoint.
+
+    Why this exists:
+      - Some clients (including browsers) will send OPTIONS preflight requests.
+      - While CORSMiddleware can handle OPTIONS, explicit registration prevents edge-case
+        proxy behaviors for legacy non-/api paths.
+
+    Returns:
+      - 200 OK (CORS headers are applied by CORSMiddleware / fallback middleware)
+    """
+    return Response(status_code=status.HTTP_200_OK)
 
 
 class SimplifiedSubmissionPayload(BaseModel):

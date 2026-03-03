@@ -14,6 +14,8 @@ New clients should use /api/v1/data-assets endpoints instead.
 All 'submission' terminology is deprecated in favor of 'data asset' (deprecated, use data asset).
 """
 from typing import Any, Dict
+import logging
+
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import JSONResponse
 
@@ -31,6 +33,8 @@ from schemas import (
     ApproveSubmissionResponse,
     ErrorResponse,
 )
+
+logger = logging.getLogger("backend_api.submissions")
 
 router = APIRouter(prefix="/api/v1/submissions", tags=["submissions"])
 
@@ -124,46 +128,55 @@ def get_submission(
     PUBLIC_INTERFACE
     Get a submission by ID (maps to data asset).
 
-    Contract goals:
-      - 404 when not found
-      - 200 with best-effort fields when found (even if validation info is unavailable)
-      - never raise unexpected exceptions that bubble into unhelpful 500s
+    Contract:
+      Inputs:
+        - submission_id: str (path param)
+        - current_user: authenticated user dict (injected)
+      Outputs:
+        - 200 with a best-effort response body when found
+        - 404 when not found
+      Errors:
+        - 401/403 from auth dependency
+        - never returns 500 due to optional/auxiliary lookups (e.g., validation history)
+      Side effects:
+        - DB reads only
+
+    Observability:
+      - Logs a single warning with submission_id on unexpected failures to aid debugging.
     """
+    conn = get_connection()
+    service = DataAssetService(conn)
+
+    data_asset = service.get_data_asset(submission_id)
+    if not data_asset:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Submission not found")
+
+    # Validation info is optional; do not allow it to break the primary contract.
+    latest_validation_run_id = None
     try:
-        conn = get_connection()
-        service = DataAssetService(conn)
         validation_service = ValidationService(conn)
+        latest_validation = validation_service.get_latest_validation_for_data_asset(submission_id) or {}
+        latest_validation_run_id = latest_validation.get("validation_run_id")
+    except Exception as exc:
+        logger.warning(
+            "Non-fatal: failed to load latest validation for submission_id=%s (%s)",
+            submission_id,
+            exc.__class__.__name__,
+        )
 
-        data_asset = service.get_data_asset(submission_id)
-        if not data_asset:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Submission not found")
+    response_data = {
+        "submission_id": data_asset.get("data_asset_id") or submission_id,
+        "package_id": data_asset.get("package_id"),
+        "package_version": data_asset.get("package_version"),
+        "state": data_asset.get("state") or "unknown",
+        "latest_validation_run_id": latest_validation_run_id,
+        "active_deviation": bool(data_asset.get("active_deviation_id")),
+        "created_at_utc": data_asset.get("created_at_utc") or data_asset.get("created_at"),
+        "last_updated_at_utc": data_asset.get("last_updated_at_utc") or data_asset.get("updated_at_utc"),
+    }
 
-        latest_validation = None
-        try:
-            # Validation lookup should not be allowed to break submission retrieval.
-            latest_validation = validation_service.get_latest_validation_for_data_asset(submission_id)
-        except Exception:
-            latest_validation = None
-
-        response_data = {
-            "submission_id": data_asset.get("data_asset_id") or submission_id,
-            "package_id": data_asset.get("package_id"),
-            "package_version": data_asset.get("package_version"),
-            "state": data_asset.get("state") or "unknown",
-            "latest_validation_run_id": (latest_validation or {}).get("validation_run_id"),
-            "active_deviation": bool(data_asset.get("active_deviation_id")),
-            "created_at_utc": data_asset.get("created_at_utc") or data_asset.get("created_at"),
-            "last_updated_at_utc": data_asset.get("last_updated_at_utc") or data_asset.get("updated_at_utc"),
-        }
-
-        response = JSONResponse(content=response_data)
-        return add_deprecation_header(response)
-
-    except HTTPException:
-        raise
-    except Exception:
-        # Avoid leaking internal exception text; global exception handler will log.
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Internal Server Error")
+    response = JSONResponse(content=response_data)
+    return add_deprecation_header(response)
 
 
 # PUBLIC_INTERFACE
