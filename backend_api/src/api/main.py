@@ -136,19 +136,27 @@ app = FastAPI(
 # - BACKEND_CORS_ALLOW_ORIGINS (optional): comma-separated list of additional
 #   allowed origins. Example:
 #   BACKEND_CORS_ALLOW_ORIGINS=https://example.com,https://staging.example.com
+#
+# NOTE (Kavia preview environments):
+# The preview frontend origin can change between sessions (dynamic subdomain),
+# so we support it via a constrained regex rather than a single hardcoded host.
 default_allowed_origins = [
     "http://localhost:3000",
     "http://127.0.0.1:3000",
     "https://localhost:3000",
     "https://127.0.0.1:3000",
-    # Kavia preview environment (matches the error context attachment)
-    "https://vscode-internal-17389-beta.beta01.cloud.kavia.ai:3000",
 ]
 
 extra_origins_env = os.getenv("BACKEND_CORS_ALLOW_ORIGINS", "").strip()
 extra_allowed_origins = [o.strip() for o in extra_origins_env.split(",") if o.strip()]
 
 allowed_origins = [*default_allowed_origins, *extra_allowed_origins]
+
+# Allow Kavia preview origins like:
+#   https://vscode-internal-17389-beta.beta01.cloud.kavia.ai:3000
+# This ensures preflight (OPTIONS) for endpoints like /api/v1/auth/login returns
+# Access-Control-Allow-Origin for the current preview host.
+kavia_preview_origin_regex = r"^https://vscode-internal-[a-zA-Z0-9-]+\.beta01\.cloud\.kavia\.ai:3000$"
 
 # Only allow credentials when we are NOT using wildcard origins.
 # (We currently do not use wildcard, but this protects future edits.)
@@ -157,6 +165,7 @@ allow_credentials = "*" not in allowed_origins
 app.add_middleware(
     CORSMiddleware,
     allow_origins=allowed_origins,
+    allow_origin_regex=kavia_preview_origin_regex,
     allow_credentials=allow_credentials,
     allow_methods=["*"],
     allow_headers=["*"],
