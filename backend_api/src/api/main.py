@@ -154,13 +154,31 @@ allowed_origins = [*default_allowed_origins, *extra_allowed_origins]
 
 # Allow Kavia preview origins like:
 #   https://vscode-internal-17389-beta.beta01.cloud.kavia.ai:3000
+#
+# Preview environments can vary by session and sometimes by port, so we:
+#  - support a constrained default regex for Kavia preview domains
+#  - allow overriding via BACKEND_CORS_ALLOW_ORIGIN_REGEX when needed
+#
 # This ensures preflight (OPTIONS) for endpoints like /api/v1/auth/login returns
 # Access-Control-Allow-Origin for the current preview host.
-kavia_preview_origin_regex = r"^https://vscode-internal-[a-zA-Z0-9-]+\.beta01\.cloud\.kavia\.ai:3000$"
+_default_kavia_preview_origin_regex = (
+    r"^https://vscode-internal-[a-zA-Z0-9-]+\.beta01\.cloud\.kavia\.ai(:\d+)?$"
+)
+kavia_preview_origin_regex = os.getenv(
+    "BACKEND_CORS_ALLOW_ORIGIN_REGEX",
+    _default_kavia_preview_origin_regex,
+).strip()
 
 # Only allow credentials when we are NOT using wildcard origins.
 # (We currently do not use wildcard, but this protects future edits.)
 allow_credentials = "*" not in allowed_origins
+
+logger.info(
+    "CORS configured. allow_origins=%s allow_origin_regex=%s allow_credentials=%s",
+    allowed_origins,
+    kavia_preview_origin_regex,
+    allow_credentials,
+)
 
 app.add_middleware(
     CORSMiddleware,
