@@ -24,7 +24,7 @@ from contextlib import asynccontextmanager
 import logging
 import os
 
-from fastapi import FastAPI, Request, status
+from fastapi import FastAPI, Request, Response, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
@@ -196,6 +196,64 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Some proxies / error paths can yield responses without CORSMiddleware-applied headers,
+# especially for unhandled exceptions or non-standard error responses.
+# This middleware is a minimal defensive layer to ensure:
+#  - Preflight (OPTIONS) always returns a sane response
+#  - CORS headers are present whenever an allowed Origin is provided
+
+
+@app.middleware("http")
+async def ensure_cors_headers(request: Request, call_next):
+    """
+    Ensure CORS headers are present on all responses (including error paths).
+
+    Why:
+      - Browsers require Access-Control-Allow-Origin for both preflight and actual requests.
+      - Some failure responses (500s, proxy-generated errors) can surface without CORS headers.
+      - This middleware provides a safe fallback that does not expand allowed origins beyond
+        the CORSMiddleware configuration.
+
+    Behavior:
+      - If request.method == OPTIONS: return 200 immediately (preflight success).
+      - Otherwise: call downstream handlers, then add ACAO if missing and origin is allowed.
+    """
+    origin = request.headers.get("origin")
+
+    # Always satisfy browser preflight; CORSMiddleware also supports this, but this ensures
+    # we never fail preflight due to routing/method edge-cases.
+    if request.method.upper() == "OPTIONS":
+        resp = Response(status_code=status.HTTP_200_OK)
+    else:
+        resp = await call_next(request)
+
+    if not origin:
+        return resp
+
+    # If CORSMiddleware already set headers, do nothing.
+    if "access-control-allow-origin" in (k.lower() for k in resp.headers.keys()):
+        return resp
+
+    # Only echo back origins we already consider allowed (do not widen policy).
+    origin_allowed = origin in allowed_origins
+    if not origin_allowed:
+        # Regex support (same as CORSMiddleware)
+        import re
+
+        try:
+            origin_allowed = bool(re.match(kavia_preview_origin_regex, origin))
+        except re.error:
+            origin_allowed = False
+
+    if origin_allowed:
+        resp.headers["Access-Control-Allow-Origin"] = origin
+        resp.headers["Vary"] = "Origin"
+        if allow_credentials:
+            resp.headers["Access-Control-Allow-Credentials"] = "true"
+
+    return resp
+
+
 # Register routers
 app.include_router(auth.router)
 app.include_router(drafts.router)
@@ -222,6 +280,18 @@ def health_check():
 
 
 # PUBLIC_INTERFACE
+@app.options("/health", tags=["health"], summary="Health CORS Preflight", description="CORS preflight handler for /health.")
+def health_options() -> Response:
+    """
+    CORS preflight for /health.
+
+    Returns:
+      - 200 OK (headers added by CORS middleware / fallback middleware)
+    """
+    return Response(status_code=status.HTTP_200_OK)
+
+
+# PUBLIC_INTERFACE
 @app.get("/health", tags=["health"], summary="Health Endpoint", description="Liveness probe (DB-independent).")
 def health_endpoint():
     """
@@ -230,6 +300,24 @@ def health_endpoint():
     Returns a deterministic payload and does not depend on DB connectivity.
     """
     return {"message": "Healthy"}
+
+
+# PUBLIC_INTERFACE
+@app.options(
+    "/ready",
+    tags=["health"],
+    summary="Ready CORS Preflight",
+    description="CORS preflight handler for /ready.",
+    operation_id="readiness_options",
+)
+def readiness_options() -> Response:
+    """
+    CORS preflight for /ready.
+
+    Returns:
+      - 200 OK (headers added by CORS middleware / fallback middleware)
+    """
+    return Response(status_code=status.HTTP_200_OK)
 
 
 # PUBLIC_INTERFACE
