@@ -1,4 +1,4 @@
-"""
+c"""
 Database module for SQLite connection and initialization.
 
 Key design goals for preview/runtime robustness:
