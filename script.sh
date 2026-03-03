@@ -30,7 +30,7 @@ if [[ ! -f "${REQ_FILE}" ]]; then
 fi
 
 HOST="${HOST:-0.0.0.0}"
-PORT="${PORT:-8000}"
+PORT="${PORT:-3001}"
 RELOAD="${RELOAD:-1}"
 
 # Always run from backend_api so uvicorn reload watches the expected directory.

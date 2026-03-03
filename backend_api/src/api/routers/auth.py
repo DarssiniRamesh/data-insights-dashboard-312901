@@ -46,8 +46,17 @@ class RegisterResponse(BaseModel):
 
 
 class LoginRequest(BaseModel):
-    username: str
-    password: str
+    """
+    Login payload.
+
+    Backward compatibility:
+    - Some clients use `email` or `login` instead of `username`.
+    - We accept any of these and normalize server-side.
+    """
+    username: str | None = Field(default=None, description="Username identifier (preferred).")
+    email: str | None = Field(default=None, description="Legacy/alternate identifier key; treated as username.")
+    login: str | None = Field(default=None, description="Legacy/alternate identifier key; treated as username.")
+    password: str = Field(..., min_length=1, description="User password.")
 
 
 class LoginResponse(BaseModel):
@@ -133,12 +142,32 @@ async def login(request: LoginRequest) -> LoginResponse:
     """
     PUBLIC_INTERFACE
     Login a user and return a bearer token.
+
+    Accepts payloads in any of these shapes:
+    - {"username": "...", "password": "..."} (preferred)
+    - {"email": "...", "password": "..."} (legacy)
+    - {"login": "...", "password": "..."} (legacy)
+
+    Returns:
+      - 200 with bearer token on success
+      - 401 on invalid credentials
     """
     db = get_connection()
     auth_service = AuthService(db)
 
+    identifier = (request.username or request.email or request.login or "").strip()
+    if not identifier:
+        raise HTTPException(
+            status_code=400,
+            detail=make_error_response(
+                "INVALID_REQUEST",
+                "Missing username/email/login field.",
+                generate_id("req"),
+            ),
+        )
+
     try:
-        token_response = auth_service.authenticate_user(request.username, request.password)
+        token_response = auth_service.authenticate_user_identifier(identifier, request.password)
         return LoginResponse(
             access_token=token_response["access_token"],
             token_type=token_response["token_type"],
@@ -147,7 +176,10 @@ async def login(request: LoginRequest) -> LoginResponse:
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=make_error_response("INTERNAL_ERROR", f"Login failed: {str(e)}", generate_id("req")))
+        raise HTTPException(
+            status_code=500,
+            detail=make_error_response("INTERNAL_ERROR", f"Login failed: {str(e)}", generate_id("req")),
+        )
 
 
 @router.post("/assign-role", response_model=AssignRoleResponse)

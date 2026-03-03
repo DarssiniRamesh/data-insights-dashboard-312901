@@ -318,6 +318,40 @@ class AuthService:
         return self.create_token(row["user_id"], row["username"], roles)
 
     # PUBLIC_INTERFACE
+    def authenticate_user_identifier(self, identifier: str, password: str) -> Dict[str, Any]:
+        """
+        Authenticate using a generic identifier field.
+
+        This exists to prevent avoidable 401s when clients send `email` or `login`
+        instead of `username`.
+
+        Current behavior (minimal/safe):
+        - Try identifier as username first.
+        - If identifier looks like an email address, also try exact match against
+          username with that email value (some systems store emails in username).
+
+        Note: We intentionally do NOT implement fuzzy matching.
+        """
+        ident = (identifier or "").strip()
+        if not ident:
+            raise HTTPException(status_code=401, detail="Invalid username or password")
+
+        # First attempt: treat identifier as username
+        try:
+            return self.authenticate_user(ident, password)
+        except HTTPException as e:
+            # If it already succeeded it would have returned; only proceed on 401.
+            if e.status_code != 401:
+                raise
+
+        # Second attempt: if it looks like an email, still only do exact match
+        # against username, but keep this hook for future user schema expansion.
+        if "@" in ident:
+            return self.authenticate_user(ident, password)
+
+        raise HTTPException(status_code=401, detail="Invalid username or password")
+
+    # PUBLIC_INTERFACE
     def assign_role(self, user_id: str, role: str, assigner_roles: List[str]) -> Dict[str, Any]:
         """Assign an additional role to a user."""
         if "admin" not in assigner_roles and "auditor" not in assigner_roles:
