@@ -147,24 +147,26 @@ def swagger_ui_docs(request: Request) -> HTMLResponse:
     """
     Swagger UI documentation page.
 
-    This custom handler fixes OpenAPI schema URL resolution when the service is
-    mounted behind a preview proxy and/or a path prefix. In those environments,
-    the default Swagger UI can incorrectly request `/openapi.json` from the
-    *root domain* (resulting in a 404).
+    The preview environment can serve multiple services under different origins/ports.
+    In that setup, constructing an absolute OpenAPI URL from forwarded headers may
+    accidentally point Swagger UI at the *root domain* (e.g. `https://<root>/openapi.json`),
+    which then returns 404.
 
-    Implementation detail:
-    - We compute the OpenAPI URL relative to the current request's base path
-      (which includes FastAPI `root_path` and any reverse-proxy prefix), so the
-      browser fetches the schema from the correct backend origin/path.
+    Fix:
+    - Use a *relative* OpenAPI URL so the browser always fetches the schema from the
+      same origin that served `/docs` (i.e., this backend service on port 3001).
+    - If the app is mounted under a path prefix via `ROOT_PATH`, include it so the
+      schema URL remains correct.
+
+    Returns:
+        HTMLResponse: Swagger UI HTML page configured with a safe OpenAPI URL.
     """
-    # request.base_url already includes scheme/host/(port) and root_path if set.
-    # We want: <base_url><openapi_url-without-leading-slash>
-    base = str(request.base_url).rstrip("/") + "/"
-    openapi_path = request.app.openapi_url.lstrip("/")
-    resolved_openapi_url = base + openapi_path
+    # Prefer a relative URL to avoid any mismatch between forwarded headers and the
+    # actual backend origin in preview. Include root_path if the app is mounted.
+    openapi_url = (request.app.root_path or "") + (request.app.openapi_url or "/openapi.json")
 
     return get_swagger_ui_html(
-        openapi_url=resolved_openapi_url,
+        openapi_url=openapi_url,
         title=f"{request.app.title} - Swagger UI",
         swagger_favicon_url="https://fastapi.tiangolo.com/img/favicon.png",
     )
