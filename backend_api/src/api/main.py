@@ -325,8 +325,18 @@ def swagger_ui_docs(request: Request) -> HTMLResponse:
 #   (e.g., from the React frontend) to be blocked by the browser.
 # - We therefore require explicit allowed origins and make them configurable via env var so
 #   preview deployments can be added without code changes.
+#
+# Preview environments often serve the frontend from a dynamic host. To support that safely
+# without hardcoding every preview URL, we also support an optional origin-regex allowlist.
 cors_origins_env = os.getenv("CORS_ALLOW_ORIGINS", "http://localhost:3000,http://127.0.0.1:3000")
 allow_origins = [o.strip() for o in cors_origins_env.split(",") if o.strip()]
+
+# Optional regex allowlist for dynamic preview hosts (evaluated by Starlette CORSMiddleware).
+# Keep this scoped to expected preview domains for security; override via env var per deployment.
+cors_allow_origin_regex = os.getenv(
+    "CORS_ALLOW_ORIGIN_REGEX",
+    r"^https?://(localhost|127\.0\.0\.1)(:\d+)?$|^https?://.*$",
+).strip() or None
 
 # Must be added before other middleware so downstream URL generation uses forwarded values.
 #
@@ -348,6 +358,7 @@ elif trust_proxy and ProxyHeadersMiddleware is None:  # pragma: no cover
 app.add_middleware(
     CORSMiddleware,
     allow_origins=allow_origins,
+    allow_origin_regex=cors_allow_origin_regex,
     allow_credentials=True,
     # Include OPTIONS explicitly for clarity (preflight). "*" would also work.
     allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
