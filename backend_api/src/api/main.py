@@ -118,11 +118,22 @@ app = FastAPI(
 )
 
 # CORS middleware
+#
+# IMPORTANT:
+# - Browsers forbid `Access-Control-Allow-Origin: *` when `Access-Control-Allow-Credentials: true`.
+#   Using allow_origins=["*"] with allow_credentials=True causes preflight/credentialed requests
+#   (e.g., from the React frontend) to be blocked by the browser.
+# - We therefore require explicit allowed origins and make them configurable via env var so
+#   preview deployments can be added without code changes.
+cors_origins_env = os.getenv("CORS_ALLOW_ORIGINS", "http://localhost:3000,http://127.0.0.1:3000")
+allow_origins = [o.strip() for o in cors_origins_env.split(",") if o.strip()]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=allow_origins,
     allow_credentials=True,
-    allow_methods=["*"],
+    # Include OPTIONS explicitly for clarity (preflight). "*" would also work.
+    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     allow_headers=["*"],
 )
 
