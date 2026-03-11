@@ -148,22 +148,28 @@ def swagger_ui_docs(request: Request) -> HTMLResponse:
     Swagger UI documentation page.
 
     The preview environment can serve multiple services under different origins/ports.
-    In that setup, constructing an absolute OpenAPI URL from forwarded headers may
-    accidentally point Swagger UI at the *root domain* (e.g. `https://<root>/openapi.json`),
-    which then returns 404.
+    In that setup, using the default OpenAPI URL (`/openapi.json`) can accidentally
+    send Swagger UI to the *root domain* (served by the preview shell) instead of
+    the backend service, resulting in a 404 even though the backend schema exists.
 
     Fix:
-    - Use a *relative* OpenAPI URL so the browser always fetches the schema from the
-      same origin that served `/docs` (i.e., this backend service on port 3001).
-    - If the app is mounted under a path prefix via `ROOT_PATH`, include it so the
-      schema URL remains correct.
+    - In preview, explicitly point Swagger UI at the backend preview-proxy path
+      (`/proxy/3001/openapi.json`).
+    - Otherwise, use a relative OpenAPI URL that honors `ROOT_PATH` when the service
+      is mounted under a path prefix.
 
     Returns:
-        HTMLResponse: Swagger UI HTML page configured with a safe OpenAPI URL.
+        HTMLResponse: Swagger UI HTML page configured with a correct OpenAPI URL.
     """
-    # Prefer a relative URL to avoid any mismatch between forwarded headers and the
-    # actual backend origin in preview. Include root_path if the app is mounted.
-    openapi_url = (request.app.root_path or "") + (request.app.openapi_url or "/openapi.json")
+    # Prefer an explicit preview-proxy path when configured. This avoids any ambiguity
+    # about which origin is serving the OpenAPI schema in the preview environment.
+    preview_proxy_openapi_url = os.getenv("SWAGGER_OPENAPI_URL", "").strip()
+    if preview_proxy_openapi_url:
+        openapi_url = preview_proxy_openapi_url
+    else:
+        # Default: a relative URL so the browser fetches from the same origin that
+        # served `/docs`, including any `ROOT_PATH` prefix.
+        openapi_url = (request.app.root_path or "") + (request.app.openapi_url or "/openapi.json")
 
     return get_swagger_ui_html(
         openapi_url=openapi_url,
