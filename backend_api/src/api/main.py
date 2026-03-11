@@ -23,7 +23,8 @@ import os
 
 from fastapi import FastAPI, Request, status
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, HTMLResponse
+from fastapi.openapi.docs import get_swagger_ui_html
 
 # Proxy header support:
 # Starlette removed ProxyHeadersMiddleware in newer versions. Use the supported
@@ -127,12 +128,46 @@ app = FastAPI(
     description=__doc__,
     version="1.0.0",
     openapi_tags=openapi_tags,
-    docs_url="/docs",
+    # We'll provide a custom /docs handler below to ensure openapi.json is fetched
+    # from the correct origin/path when running behind preview proxies.
+    docs_url=None,
     redoc_url="/redoc",
     openapi_url="/openapi.json",
     root_path=root_path,
     lifespan=lifespan,
 )
+
+
+# PUBLIC_INTERFACE
+@app.get(
+    "/docs",
+    include_in_schema=False,
+)
+def swagger_ui_docs(request: Request) -> HTMLResponse:
+    """
+    Swagger UI documentation page.
+
+    This custom handler fixes OpenAPI schema URL resolution when the service is
+    mounted behind a preview proxy and/or a path prefix. In those environments,
+    the default Swagger UI can incorrectly request `/openapi.json` from the
+    *root domain* (resulting in a 404).
+
+    Implementation detail:
+    - We compute the OpenAPI URL relative to the current request's base path
+      (which includes FastAPI `root_path` and any reverse-proxy prefix), so the
+      browser fetches the schema from the correct backend origin/path.
+    """
+    # request.base_url already includes scheme/host/(port) and root_path if set.
+    # We want: <base_url><openapi_url-without-leading-slash>
+    base = str(request.base_url).rstrip("/") + "/"
+    openapi_path = request.app.openapi_url.lstrip("/")
+    resolved_openapi_url = base + openapi_path
+
+    return get_swagger_ui_html(
+        openapi_url=resolved_openapi_url,
+        title=f"{request.app.title} - Swagger UI",
+        swagger_favicon_url="https://fastapi.tiangolo.com/img/favicon.png",
+    )
 
 # CORS middleware
 #
