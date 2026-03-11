@@ -24,6 +24,7 @@ import os
 from fastapi import FastAPI, Request, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from starlette.middleware.proxy_headers import ProxyHeadersMiddleware
 
 # Ensure we emit useful startup diagnostics in preview/CI even if no logging is configured.
 if not logging.getLogger().handlers:
@@ -107,6 +108,13 @@ openapi_tags = [
     }
 ]
 
+# If the service is deployed behind a reverse proxy that mounts it under a path prefix
+# (e.g., https://host/some/prefix -> this app), Swagger UI must request the OpenAPI
+# schema from that same prefix. Configure this via ROOT_PATH.
+#
+# NOTE: Do not hardcode deployment paths; use env var so preview/prod can differ.
+root_path = os.getenv("ROOT_PATH", "")
+
 app = FastAPI(
     title="Data Product Publishing API",
     description=__doc__,
@@ -114,7 +122,9 @@ app = FastAPI(
     openapi_tags=openapi_tags,
     docs_url="/docs",
     redoc_url="/redoc",
-    lifespan=lifespan
+    openapi_url="/openapi.json",
+    root_path=root_path,
+    lifespan=lifespan,
 )
 
 # CORS middleware
@@ -127,6 +137,9 @@ app = FastAPI(
 #   preview deployments can be added without code changes.
 cors_origins_env = os.getenv("CORS_ALLOW_ORIGINS", "http://localhost:3000,http://127.0.0.1:3000")
 allow_origins = [o.strip() for o in cors_origins_env.split(",") if o.strip()]
+
+# Must be added before other middleware so downstream URL generation uses forwarded values.
+app.add_middleware(ProxyHeadersMiddleware, trusted_hosts="*")
 
 app.add_middleware(
     CORSMiddleware,
