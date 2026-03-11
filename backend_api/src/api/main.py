@@ -24,7 +24,14 @@ import os
 from fastapi import FastAPI, Request, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-from starlette.middleware.proxy_headers import ProxyHeadersMiddleware
+
+# Proxy header support:
+# Starlette removed ProxyHeadersMiddleware in newer versions. Use the supported
+# ForwardedHeadersMiddleware when available so the app doesn't crash at import time.
+try:  # pragma: no cover
+    from starlette.middleware.forwarded import ForwardedHeadersMiddleware
+except Exception:  # pragma: no cover
+    ForwardedHeadersMiddleware = None  # type: ignore[assignment]
 
 # Ensure we emit useful startup diagnostics in preview/CI even if no logging is configured.
 if not logging.getLogger().handlers:
@@ -139,7 +146,18 @@ cors_origins_env = os.getenv("CORS_ALLOW_ORIGINS", "http://localhost:3000,http:/
 allow_origins = [o.strip() for o in cors_origins_env.split(",") if o.strip()]
 
 # Must be added before other middleware so downstream URL generation uses forwarded values.
-app.add_middleware(ProxyHeadersMiddleware, trusted_hosts="*")
+#
+# NOTE: Starlette's forwarded middleware is safe to use behind a reverse proxy that
+# sets Forwarded / X-Forwarded-* headers. If it's unavailable, we skip it rather than
+# crashing the service (boot stability > perfect URL reconstruction).
+trust_proxy = os.getenv("TRUST_PROXY", "false").strip().lower() in {"1", "true", "yes", "on"}
+if trust_proxy and ForwardedHeadersMiddleware is not None:
+    app.add_middleware(ForwardedHeadersMiddleware)
+elif trust_proxy and ForwardedHeadersMiddleware is None:  # pragma: no cover
+    logger.warning(
+        "TRUST_PROXY enabled but ForwardedHeadersMiddleware is unavailable; "
+        "skipping proxy header processing."
+    )
 
 app.add_middleware(
     CORSMiddleware,
