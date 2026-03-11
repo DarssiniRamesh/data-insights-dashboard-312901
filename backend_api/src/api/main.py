@@ -293,21 +293,26 @@ def swagger_ui_docs(request: Request) -> HTMLResponse:
     """
     Swagger UI documentation page.
 
-    This is a custom docs handler because the backend is often served behind a proxy prefix
-    (e.g. `/proxy/3001`) in preview. Swagger must fetch the schema from the same prefix.
+    IMPORTANT (preview proxy compatibility):
+    This app is often exposed behind a path prefix such as `/proxy/<port>/...`.
+    Swagger UI historically embeds an absolute schema URL (e.g. `/openapi.json`),
+    which breaks under such mounts because it requests the site root.
+
+    To make Swagger UI robust under *any* mount prefix, we configure it to use a
+    relative URL: `./openapi.json`.
+
+    Relative resolution examples:
+      - Served at `/docs` -> `./openapi.json` resolves to `/openapi.json`
+      - Served at `/proxy/3001/docs` -> `./openapi.json` resolves to `/proxy/3001/openapi.json`
 
     Returns:
-        HTMLResponse: Swagger UI HTML page configured with a correct OpenAPI URL.
+        HTMLResponse: Swagger UI HTML page configured to load OpenAPI schema via a relative URL.
     """
-    try:
-        openapi_url = derive_swagger_openapi_url(request)
-    except Exception:
-        # Never fail /docs; fall back to the app's configured OpenAPI URL.
-        logger.exception("Failed to derive Swagger OpenAPI URL; falling back to app.openapi_url.")
-        openapi_url = request.app.openapi_url or "/openapi.json"
-
+    # NOTE: We intentionally use a relative OpenAPI URL rather than deriving an
+    # absolute prefix. This makes the docs work under preview proxies and other
+    # reverse-proxy mounts without relying on forwarded headers.
     return get_swagger_ui_html(
-        openapi_url=openapi_url,
+        openapi_url="./openapi.json",
         title=f"{request.app.title} - Swagger UI",
         swagger_favicon_url="https://fastapi.tiangolo.com/img/favicon.png",
     )

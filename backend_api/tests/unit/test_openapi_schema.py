@@ -16,58 +16,55 @@ def test_openapi_schema_can_be_generated(app):
 
 @pytest.mark.unit
 @pytest.mark.asyncio
-async def test_swagger_ui_uses_forwarded_prefix_for_openapi_url(async_client):
+async def test_swagger_ui_uses_relative_openapi_url_under_forwarded_prefix(async_client):
     """
-    NFR-DOC-PROXY-SWAGGER:
-    When /docs is accessed behind a proxy mount prefix (e.g. /proxy/3001),
-    the returned Swagger UI HTML must reference the OpenAPI schema under the
-    same prefix (e.g. /proxy/3001/openapi.json) and must NOT reference root
-    /openapi.json which 404s in preview.
+    NFR-DOC-PROXY-SWAGGER (recommended approach):
+    Swagger UI should use a *relative* OpenAPI URL (`./openapi.json`) so it resolves
+    correctly when the docs are served under a preview proxy prefix like `/proxy/3001/docs`.
+
+    This ensures the rendered HTML does not embed `url: '/openapi.json'`.
     """
     resp = await async_client.get("/docs", headers={"X-Forwarded-Prefix": "/proxy/3001"})
     assert resp.status_code == 200
     html = resp.text
 
-    # Must contain the proxied openapi URL
-    assert "/proxy/3001/openapi.json" in html
+    # Relative OpenAPI URL should be present
+    assert "url: './openapi.json'" in html
 
-    # And must not fall back to requesting the root schema
-    assert '"/openapi.json"' not in html
+    # Must not reference root schema path
+    assert "url: '/openapi.json'" not in html
 
 
 @pytest.mark.unit
 @pytest.mark.asyncio
-async def test_swagger_ui_derives_proxy_prefix_from_request_path_when_headers_missing(async_client):
+async def test_swagger_ui_uses_relative_openapi_url_when_accessed_via_proxy_prefixed_path(async_client):
     """
     NFR-DOC-PROXY-SWAGGER-NO-FWD-HEADERS:
-    In some preview/proxy setups, X-Forwarded-Prefix may be missing.
-    When the externally visible docs URL is `/proxy/3001/docs`, Swagger UI must still
-    fetch the schema from `/proxy/3001/openapi.json`.
-
-    We simulate this by using the proxy-prefixed docs route directly without forwarded headers.
+    Even if forwarded headers are missing, when the externally visible docs URL is
+    `/proxy/3001/docs`, Swagger UI should still use the same relative OpenAPI URL
+    (`./openapi.json`) which will resolve to `/proxy/3001/openapi.json` in the browser.
     """
     resp = await async_client.get("/proxy/3001/docs")
     assert resp.status_code == 200
     html = resp.text
 
-    assert "/proxy/3001/openapi.json" in html
-    assert '"/openapi.json"' not in html
+    assert "url: './openapi.json'" in html
+    assert "url: '/openapi.json'" not in html
 
 
 @pytest.mark.unit
 @pytest.mark.asyncio
-async def test_swagger_ui_uses_forwarded_uri_when_proxy_strips_prefix(async_client):
+async def test_swagger_ui_uses_relative_openapi_url_when_proxy_strips_prefix(async_client):
     """
     NFR-DOC-PROXY-SWAGGER-X-FORWARDED-URI:
-    Some preview proxies strip the mount prefix before forwarding to the app,
-    so the app sees `/docs` but still provides the original external path in
-    X-Forwarded-Uri (or similar).
-
-    In that case, Swagger UI must still point at `/proxy/<port>/openapi.json`.
+    If a proxy strips the mount prefix before forwarding to the app (so the app sees `/docs`)
+    but provides the original external path in X-Forwarded-Uri, Swagger should still be
+    configured to use a relative schema URL (`./openapi.json`) so the browser resolves it
+    relative to the docs page URL.
     """
     resp = await async_client.get("/docs", headers={"X-Forwarded-Uri": "/proxy/3001/docs"})
     assert resp.status_code == 200
     html = resp.text
 
-    assert "/proxy/3001/openapi.json" in html
-    assert '"/openapi.json"' not in html
+    assert "url: './openapi.json'" in html
+    assert "url: '/openapi.json'" not in html
