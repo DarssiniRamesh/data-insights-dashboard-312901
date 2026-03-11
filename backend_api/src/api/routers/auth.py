@@ -49,6 +49,49 @@ async def register_preflight() -> Response:
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
+# PUBLIC_INTERFACE
+@router.options(
+    "/login",
+    include_in_schema=False,
+)
+async def login_preflight() -> Response:
+    """
+    PUBLIC_INTERFACE
+    CORSPreflightAuthLoginFlow: respond to browser preflight for login.
+
+    See register_preflight() for rationale. This ensures OPTIONS /api/v1/auth/login
+    never falls through to other handlers and returns an error when proxies alter
+    the preflight headers.
+    """
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+# PUBLIC_INTERFACE
+@router.options(
+    "/{path:path}",
+    include_in_schema=False,
+)
+async def auth_catchall_preflight(path: str) -> Response:
+    """
+    PUBLIC_INTERFACE
+    CORSPreflightAuthCatchAllFlow: respond to any auth preflight OPTIONS.
+
+    Why:
+      - Some deployments issue OPTIONS requests for additional auth endpoints
+        (e.g., /me, /assign-role, /toggle-registration), or proxies may strip
+        the `Access-Control-Request-Method` header causing CORSMiddleware to not
+        recognize the request as a preflight.
+      - Returning 204 here ensures preflight succeeds consistently for any path
+        under the auth router.
+
+    Notes:
+      - CORSMiddleware will still be responsible for adding the actual
+        Access-Control-* headers when the request includes an Origin and it matches
+        configured CORS_ALLOW_ORIGINS.
+    """
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
 class RegisterRequest(BaseModel):
     username: str = Field(..., min_length=3, max_length=50)
     password: str = Field(..., min_length=8)
