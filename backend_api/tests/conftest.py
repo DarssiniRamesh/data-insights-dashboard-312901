@@ -1,3 +1,4 @@
+    
 import os
 import sys
 import tempfile
@@ -86,21 +87,18 @@ async def async_client(app) -> AsyncIterator[AsyncClient]:
     HTTPX AsyncClient bound to the ASGI app, enabling API tests without
     running an external uvicorn server.
 
-    Why we manually manage lifespan:
-      - httpx's ASGITransport does not reliably run FastAPI lifespan hooks in all
-        versions/configurations.
-      - This project initializes the SQLite schema + seeds required users in the
-        FastAPI *lifespan* (not in router startup events).
-      - Many API routes expect tables like `users`/`submissions` to exist.
-
-    Therefore:
-      - Enter the app's lifespan context explicitly for each test using async_client.
-      - This guarantees init_db()/seed_test_users() ran against our isolated SQLite DB.
+    IMPORTANT:
+      - The installed httpx ASGITransport does not support `lifespan=...`.
+      - We still must run FastAPI startup/shutdown so init_db()/seed_test_users()
+        execute (DB schema + deterministic 'system' user seeding for audit FK).
     """
-    async with app.router.lifespan_context(app):
+    await app.router.startup()
+    try:
         transport = ASGITransport(app=app)
         async with AsyncClient(transport=transport, base_url="http://testserver") as client:
             yield client
+    finally:
+        await app.router.shutdown()
 
 
 @pytest.fixture()
