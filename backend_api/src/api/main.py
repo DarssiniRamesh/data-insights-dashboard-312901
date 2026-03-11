@@ -213,19 +213,22 @@ def derive_swagger_openapi_url(request: Request) -> str:
     if explicit:
         return explicit
 
-    # Most reliable in preview: if we are *currently* under /proxy/<port>/... then we
-    # must fetch the schema from the same prefix.
-    path_prefix = _normalize_mount_prefix(_derive_proxy_prefix_from_path(request.url.path))
-    if path_prefix:
-        return path_prefix + (request.app.openapi_url or "/openapi.json")
-
+    # Most reliable in preview: use the prefix provided by the reverse proxy when available.
+    # In many preview environments, external users access `/proxy/<port>/docs` but the app
+    # receives it as `/docs` with X-Forwarded-Prefix set.
     forwarded_prefix = _normalize_mount_prefix(request.headers.get("x-forwarded-prefix") or "")
     if forwarded_prefix:
         return forwarded_prefix + (request.app.openapi_url or "/openapi.json")
 
+    # Next best: ASGI root_path if configured (e.g., via ROOT_PATH env var).
     root_path_prefix = _normalize_mount_prefix(getattr(request.app, "root_path", "") or "")
     if root_path_prefix:
         return root_path_prefix + (request.app.openapi_url or "/openapi.json")
+
+    # Fallback: if we are *currently* under /proxy/<port>/... then we can infer the mount.
+    path_prefix = _normalize_mount_prefix(_derive_proxy_prefix_from_path(request.url.path))
+    if path_prefix:
+        return path_prefix + (request.app.openapi_url or "/openapi.json")
 
     # Last resort: some environments may not forward prefix headers but do set Referer.
     referer = (request.headers.get("referer") or "").strip()
