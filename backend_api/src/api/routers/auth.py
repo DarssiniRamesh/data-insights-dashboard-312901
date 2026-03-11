@@ -3,7 +3,7 @@ PUBLIC_INTERFACE
 Authentication and authorization router.
 """
 import os
-from fastapi import APIRouter, HTTPException, Depends
+from fastapi import APIRouter, HTTPException, Depends, Response, status
 from typing import List
 from pydantic import BaseModel, Field
 
@@ -18,6 +18,35 @@ from utils import make_error_response, generate_id
 
 
 router = APIRouter(prefix="/api/v1/auth", tags=["auth"])
+
+
+# PUBLIC_INTERFACE
+@router.options(
+    "/register",
+    include_in_schema=False,
+)
+async def register_preflight() -> Response:
+    """
+    PUBLIC_INTERFACE
+    CORSPreflightAuthRegisterFlow: respond to browser preflight for user registration.
+
+    Contract:
+      - Inputs: An HTTP OPTIONS request (may or may not include CORS preflight headers).
+      - Outputs: 204 No Content with an empty body.
+      - Errors: None (always succeeds).
+      - Side effects: None.
+
+    Notes:
+      - Starlette's CORSMiddleware only treats an OPTIONS as a CORS preflight when
+        `Access-Control-Request-Method` is present. Some environments/proxies/tools
+        may omit it, causing the request to fall through to routing (often resulting
+        in 405/400). This explicit handler guarantees a success response for the
+        register preflight path.
+      - CORSMiddleware (configured at the app level) is still responsible for adding
+        the correct `Access-Control-*` headers based on Origin and configured
+        allowed origins/credentials.
+    """
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 class RegisterRequest(BaseModel):
