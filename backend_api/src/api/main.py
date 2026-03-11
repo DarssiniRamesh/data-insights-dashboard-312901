@@ -25,6 +25,7 @@ from fastapi import FastAPI, Request, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, HTMLResponse
 from fastapi.openapi.docs import get_swagger_ui_html
+from urllib.parse import urlparse
 
 # Proxy header support:
 # When running behind the preview proxy (/proxy/<port>/...), we may receive
@@ -145,6 +146,100 @@ app = FastAPI(
 )
 
 
+def _normalize_mount_prefix(prefix: str) -> str:
+    """Normalize an externally visible mount prefix.
+
+    Contract:
+      - Input may be "", "/", "/proxy/3001", "/proxy/3001/".
+      - Output is always "" or a string starting with "/" and never ending with "/".
+
+    This ensures we can safely do: `prefix + "/openapi.json"`.
+    """
+    prefix = (prefix or "").strip()
+    if prefix in {"", "/"}:
+        return ""
+    if not prefix.startswith("/"):
+        prefix = "/" + prefix
+    if prefix.endswith("/"):
+        prefix = prefix[:-1]
+    return prefix
+
+
+def _derive_proxy_prefix_from_path(path: str) -> str:
+    """Derive preview proxy mount prefix from a request path.
+
+    Contract:
+      - If the request path begins with `/proxy/<port>/...`, returns `/proxy/<port>`.
+      - Otherwise returns "".
+
+    Examples:
+      - "/proxy/3001/docs" -> "/proxy/3001"
+      - "/docs" -> ""
+    """
+    path = (path or "").strip()
+    if not path.startswith("/proxy/"):
+        return ""
+    # Expected shape: /proxy/<port>/...
+    parts = path.split("/")
+    if len(parts) >= 3 and parts[1] == "proxy" and parts[2]:
+        return f"/proxy/{parts[2]}"
+    return ""
+
+
+# PUBLIC_INTERFACE
+def derive_swagger_openapi_url(request: Request) -> str:
+    """SwaggerOpenAPIUrlDerivationFlow: compute the correct OpenAPI schema URL for Swagger UI.
+
+    Why this exists:
+      Swagger UI must fetch the schema from the *same external mount prefix* that serves `/docs`.
+      In preview, the backend is commonly exposed under `/proxy/<port>/...`. If Swagger UI uses
+      `/openapi.json` it will incorrectly request the site root and 404.
+
+    Resolution order (highest precedence first):
+      1) SWAGGER_OPENAPI_URL env var (explicit override)
+      2) X-Forwarded-Prefix header (if provided by reverse proxy)
+      3) FastAPI/Starlette root_path (ROOT_PATH env var / ASGI root path)
+      4) Derive from request path (e.g. `/proxy/3001/docs` -> `/proxy/3001`)
+      5) Derive from Referer header as a last resort (some proxies only set it)
+
+    Returns:
+      str: A URL path suitable for get_swagger_ui_html(openapi_url=...). Typically a relative path
+           like `/proxy/3001/openapi.json` or `/openapi.json`.
+
+    Failure modes:
+      - If no prefix information is available, falls back to `request.app.openapi_url` (default `/openapi.json`).
+    """
+    explicit = os.getenv("SWAGGER_OPENAPI_URL", "").strip()
+    if explicit:
+        return explicit
+
+    forwarded_prefix = _normalize_mount_prefix(request.headers.get("x-forwarded-prefix") or "")
+    if forwarded_prefix:
+        return forwarded_prefix + (request.app.openapi_url or "/openapi.json")
+
+    root_path_prefix = _normalize_mount_prefix(getattr(request.app, "root_path", "") or "")
+    if root_path_prefix:
+        return root_path_prefix + (request.app.openapi_url or "/openapi.json")
+
+    path_prefix = _normalize_mount_prefix(_derive_proxy_prefix_from_path(request.url.path))
+    if path_prefix:
+        return path_prefix + (request.app.openapi_url or "/openapi.json")
+
+    # Last resort: some environments may not forward prefix headers but do set Referer.
+    referer = (request.headers.get("referer") or "").strip()
+    if referer:
+        try:
+            parsed = urlparse(referer)
+            ref_prefix = _normalize_mount_prefix(_derive_proxy_prefix_from_path(parsed.path))
+            if ref_prefix:
+                return ref_prefix + (request.app.openapi_url or "/openapi.json")
+        except Exception:
+            # Non-fatal; keep the fallback deterministic.
+            logger.debug("Failed to parse Referer for Swagger prefix derivation.", exc_info=True)
+
+    return request.app.openapi_url or "/openapi.json"
+
+
 # PUBLIC_INTERFACE
 @app.get(
     "/docs",
@@ -154,46 +249,13 @@ def swagger_ui_docs(request: Request) -> HTMLResponse:
     """
     Swagger UI documentation page.
 
-    The preview environment serves services behind a proxy prefix, e.g.:
-
-      /proxy/3001/docs
-      /proxy/3001/openapi.json
-
-    If Swagger UI requests the schema from `/openapi.json` (root), it 404s because
-    the schema is only reachable under the proxy prefix.
-
-    This handler ensures Swagger UI always computes the correct OpenAPI URL under
-    the *same* externally-visible prefix as the `/docs` page.
-
-    Resolution order:
-      1) SWAGGER_OPENAPI_URL env var (explicit override; highest precedence)
-      2) X-Forwarded-Prefix header (common in reverse proxies)
-      3) FastAPI/Starlette `root_path` (set via ROOT_PATH env var or ASGI server)
+    This is a custom docs handler because the backend is often served behind a proxy prefix
+    (e.g. `/proxy/3001`) in preview. Swagger must fetch the schema from the same prefix.
 
     Returns:
         HTMLResponse: Swagger UI HTML page configured with a correct OpenAPI URL.
     """
-    # Prefer an explicit preview-proxy path when configured. This avoids any ambiguity
-    # about which origin is serving the OpenAPI schema in the preview environment.
-    preview_proxy_openapi_url = os.getenv("SWAGGER_OPENAPI_URL", "").strip()
-    if preview_proxy_openapi_url:
-        openapi_url = preview_proxy_openapi_url
-    else:
-        # Many reverse proxies (including dev preview shells) forward the externally
-        # visible mount prefix so apps can reconstruct correct URLs.
-        forwarded_prefix = (request.headers.get("x-forwarded-prefix") or "").strip()
-
-        # Normalize prefix to "/prefix" (no trailing slash) or "".
-        if forwarded_prefix in {"/", ""}:
-            forwarded_prefix = ""
-        elif forwarded_prefix.endswith("/"):
-            forwarded_prefix = forwarded_prefix[:-1]
-
-        base_prefix = forwarded_prefix or (request.app.root_path or "")
-
-        # Default: a relative URL so the browser fetches from the same origin that
-        # served `/docs`, including any external prefix.
-        openapi_url = base_prefix + (request.app.openapi_url or "/openapi.json")
+    openapi_url = derive_swagger_openapi_url(request)
 
     return get_swagger_ui_html(
         openapi_url=openapi_url,
