@@ -13,15 +13,15 @@ set -euo pipefail
 #  ./run_local_backend.sh
 #
 # Optional environment variables:
-#  PORT (default: 8000)
-#  HOST (default: 127.0.0.1)
+#  PORT (default: 3001)
+#  HOST (default: 0.0.0.0)   # IMPORTANT for preview/containers: must listen on all interfaces
 #  LOG_LEVEL (default: INFO)
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "${SCRIPT_DIR}"
 
-HOST="${HOST:-127.0.0.1}"
-PORT="${PORT:-8000}"
+HOST="${HOST:-0.0.0.0}"
+PORT="${PORT:-3001}"
 LOG_LEVEL="${LOG_LEVEL:-INFO}"
 
 VENV_DIR=".venv"
