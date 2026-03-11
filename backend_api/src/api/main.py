@@ -213,6 +213,12 @@ def derive_swagger_openapi_url(request: Request) -> str:
     if explicit:
         return explicit
 
+    # Most reliable in preview: if we are *currently* under /proxy/<port>/... then we
+    # must fetch the schema from the same prefix.
+    path_prefix = _normalize_mount_prefix(_derive_proxy_prefix_from_path(request.url.path))
+    if path_prefix:
+        return path_prefix + (request.app.openapi_url or "/openapi.json")
+
     forwarded_prefix = _normalize_mount_prefix(request.headers.get("x-forwarded-prefix") or "")
     if forwarded_prefix:
         return forwarded_prefix + (request.app.openapi_url or "/openapi.json")
@@ -220,10 +226,6 @@ def derive_swagger_openapi_url(request: Request) -> str:
     root_path_prefix = _normalize_mount_prefix(getattr(request.app, "root_path", "") or "")
     if root_path_prefix:
         return root_path_prefix + (request.app.openapi_url or "/openapi.json")
-
-    path_prefix = _normalize_mount_prefix(_derive_proxy_prefix_from_path(request.url.path))
-    if path_prefix:
-        return path_prefix + (request.app.openapi_url or "/openapi.json")
 
     # Last resort: some environments may not forward prefix headers but do set Referer.
     referer = (request.headers.get("referer") or "").strip()
@@ -255,7 +257,12 @@ def swagger_ui_docs(request: Request) -> HTMLResponse:
     Returns:
         HTMLResponse: Swagger UI HTML page configured with a correct OpenAPI URL.
     """
-    openapi_url = derive_swagger_openapi_url(request)
+    try:
+        openapi_url = derive_swagger_openapi_url(request)
+    except Exception:
+        # Never fail /docs; fall back to the app's configured OpenAPI URL.
+        logger.exception("Failed to derive Swagger OpenAPI URL; falling back to app.openapi_url.")
+        openapi_url = request.app.openapi_url or "/openapi.json"
 
     return get_swagger_ui_html(
         openapi_url=openapi_url,
