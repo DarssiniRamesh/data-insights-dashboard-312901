@@ -186,6 +186,38 @@ def _derive_proxy_prefix_from_path(path: str) -> str:
     return ""
 
 
+def _get_forwarded_external_path(request: Request) -> str:
+    """Best-effort retrieval of the *external* path as seen by the client.
+
+    Many reverse proxies strip the mount prefix before forwarding to the upstream
+    app. In those cases, `request.url.path` will be `/docs`, but the proxy may
+    still provide one of these headers containing the original URI:
+
+      - X-Forwarded-Uri (common)
+      - X-Original-Uri (nginx ingress / some proxies)
+      - X-Rewrite-Url (some gateways)
+
+    We use these as additional signals to derive `/proxy/<port>` so Swagger UI
+    can fetch the OpenAPI schema from the correct proxied path.
+
+    Returns:
+      str: A URL path (starting with "/") or "" if unavailable.
+    """
+    for header_name in ("x-forwarded-uri", "x-original-uri", "x-rewrite-url"):
+        value = (request.headers.get(header_name) or "").strip()
+        if value:
+            # Some proxies may include scheme/host; keep only the path if so.
+            try:
+                parsed = urlparse(value)
+                if parsed.scheme or parsed.netloc:
+                    return parsed.path or ""
+            except Exception:
+                # If it's not parseable, treat it as a raw path.
+                pass
+            return value
+    return ""
+
+
 # PUBLIC_INTERFACE
 def derive_swagger_openapi_url(request: Request) -> str:
     """SwaggerOpenAPIUrlDerivationFlow: compute the correct OpenAPI schema URL for Swagger UI.
@@ -199,8 +231,9 @@ def derive_swagger_openapi_url(request: Request) -> str:
       1) SWAGGER_OPENAPI_URL env var (explicit override)
       2) X-Forwarded-Prefix header (if provided by reverse proxy)
       3) FastAPI/Starlette root_path (ROOT_PATH env var / ASGI root path)
-      4) Derive from request path (e.g. `/proxy/3001/docs` -> `/proxy/3001`)
-      5) Derive from Referer header as a last resort (some proxies only set it)
+      4) Derive from forwarded/original external path headers (X-Forwarded-Uri / X-Original-Uri)
+      5) Derive from request path (e.g. `/proxy/3001/docs` -> `/proxy/3001`)
+      6) Derive from Referer header as a last resort (some proxies only set it)
 
     Returns:
       str: A URL path suitable for get_swagger_ui_html(openapi_url=...). Typically a relative path
@@ -224,6 +257,12 @@ def derive_swagger_openapi_url(request: Request) -> str:
     root_path_prefix = _normalize_mount_prefix(getattr(request.app, "root_path", "") or "")
     if root_path_prefix:
         return root_path_prefix + (request.app.openapi_url or "/openapi.json")
+
+    # Some proxies strip the prefix but provide the original path via headers.
+    external_path = _get_forwarded_external_path(request)
+    external_prefix = _normalize_mount_prefix(_derive_proxy_prefix_from_path(external_path))
+    if external_prefix:
+        return external_prefix + (request.app.openapi_url or "/openapi.json")
 
     # Fallback: if we are *currently* under /proxy/<port>/... then we can infer the mount.
     path_prefix = _normalize_mount_prefix(_derive_proxy_prefix_from_path(request.url.path))

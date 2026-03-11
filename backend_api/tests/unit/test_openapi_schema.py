@@ -52,3 +52,22 @@ async def test_swagger_ui_derives_proxy_prefix_from_request_path_when_headers_mi
 
     assert "/proxy/3001/openapi.json" in html
     assert '"/openapi.json"' not in html
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_swagger_ui_uses_forwarded_uri_when_proxy_strips_prefix(async_client):
+    """
+    NFR-DOC-PROXY-SWAGGER-X-FORWARDED-URI:
+    Some preview proxies strip the mount prefix before forwarding to the app,
+    so the app sees `/docs` but still provides the original external path in
+    X-Forwarded-Uri (or similar).
+
+    In that case, Swagger UI must still point at `/proxy/<port>/openapi.json`.
+    """
+    resp = await async_client.get("/docs", headers={"X-Forwarded-Uri": "/proxy/3001/docs"})
+    assert resp.status_code == 200
+    html = resp.text
+
+    assert "/proxy/3001/openapi.json" in html
+    assert '"/openapi.json"' not in html
