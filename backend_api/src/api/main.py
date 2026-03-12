@@ -23,7 +23,7 @@ import os
 
 from fastapi import FastAPI, Request, status
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse, HTMLResponse
+from fastapi.responses import JSONResponse, HTMLResponse, RedirectResponse, RedirectResponse
 from fastapi.openapi.docs import get_swagger_ui_html
 from urllib.parse import urlparse
 
@@ -375,6 +375,114 @@ app.include_router(evidence.router)
 
 # Register compatibility router (for test payloads)
 app.include_router(submissions_compat.router)
+
+# ---------------------------------------------------------------------------
+# Preview proxy compatibility routes
+# ---------------------------------------------------------------------------
+# The preview environment exposes services under a mount prefix like:
+#   https://<domain>/proxy/<port>/...
+#
+# Users and the frontend may directly request:
+#   GET /proxy/3001
+#   GET /proxy/3001/health
+#   GET /proxy/3001/docs
+#   GET /proxy/3001/openapi.json
+#
+# We explicitly support those paths here to avoid depending on proxy-specific
+# root_path/forwarded-header behavior.
+
+# PUBLIC_INTERFACE
+@app.get(
+    "/proxy/{port}",
+    tags=["health"],
+    summary="Proxy-prefixed root (preview compatibility)",
+    description="Preview proxy compatibility endpoint. Behaves like the service root `/`.",
+    include_in_schema=False,
+)
+def proxy_root(port: str):
+    """Proxy-prefixed root endpoint.
+
+    Args:
+        port: Preview proxy port segment from the external URL (e.g., '3001').
+
+    Returns:
+        dict: Deterministic liveness payload.
+    """
+    return {"message": "Healthy", "proxy_port": port}
+
+
+# PUBLIC_INTERFACE
+@app.get(
+    "/proxy/{port}/health",
+    tags=["health"],
+    summary="Proxy-prefixed health (preview compatibility)",
+    description="Preview proxy compatibility endpoint. Behaves like `/health`.",
+    include_in_schema=False,
+)
+def proxy_health(port: str):
+    """Proxy-prefixed health endpoint.
+
+    Args:
+        port: Preview proxy port segment from the external URL.
+
+    Returns:
+        dict: Deterministic liveness payload.
+    """
+    return {"message": "Healthy", "proxy_port": port}
+
+
+# PUBLIC_INTERFACE
+@app.get(
+    "/proxy/{port}/ready",
+    tags=["health"],
+    summary="Proxy-prefixed readiness (preview compatibility)",
+    description="Preview proxy compatibility endpoint. Behaves like `/ready`.",
+    include_in_schema=False,
+)
+def proxy_ready(port: str, request: Request):
+    """Proxy-prefixed readiness endpoint.
+
+    Args:
+        port: Preview proxy port segment from the external URL.
+        request: FastAPI request.
+
+    Returns:
+        JSONResponse|dict: Same result as GET `/ready`.
+    """
+    return readiness_endpoint(request)
+
+
+# PUBLIC_INTERFACE
+@app.get(
+    "/proxy/{port}/docs",
+    include_in_schema=False,
+)
+def proxy_swagger_ui_docs(port: str, request: Request) -> HTMLResponse:
+    """Proxy-prefixed Swagger UI.
+
+    Since the Swagger UI is configured with a relative OpenAPI URL (`./openapi.json`),
+    serving it at `/proxy/<port>/docs` makes the browser request the correct schema
+    at `/proxy/<port>/openapi.json`.
+    """
+    return swagger_ui_docs(request)
+
+
+# PUBLIC_INTERFACE
+@app.get(
+    "/proxy/{port}/openapi.json",
+    include_in_schema=False,
+)
+def proxy_openapi(port: str, request: Request):
+    """Proxy-prefixed OpenAPI schema.
+
+    Args:
+        port: Preview proxy port segment from the external URL.
+        request: FastAPI request.
+
+    Returns:
+        dict: The OpenAPI schema (same as `/openapi.json`).
+    """
+    return request.app.openapi()
 
 
 # PUBLIC_INTERFACE
